@@ -14,6 +14,7 @@
 #include <thread>
 #include <sstream>
 #include <iomanip>
+#include "frame.h"
 
 using std::vector;
 using std::map;
@@ -22,15 +23,16 @@ using std::string;
 using std::cout;
 using std::endl;
 
-
-
-
-
 namespace process{
 	//#1
 	struct heap{ int i = 1; };			//Template for heap struct.
 	struct stack{ int i = 1; };			//Template for stack struct.
-	struct symbolTable{ int i = 1; };	//Template for symbolTable struct.
+	struct symbolTableCell{
+		string identifier;  //identifier like varA, varB
+		uint16_t val;		//uint16 value (0, 65,535)
+		string address;     //holds the address like 0x500 etc
+	};
+	//struct symbolTable{ int i = 1; };	//Template for symbolTable struct.
 	struct subroutine{ int i = 1; };	//Template for subroutine struct.
 	struct library{ int i = 1; };		//Template for  struct.
 	struct instruction{ int i = 1; };	//Template for instruction struct.
@@ -51,8 +53,9 @@ namespace process{
 			int currLine = 0;			//Which line of code the CPU is currently executing.
 			vector<string> log;			//Log
 			list<string> commands;		//List of commands that the process has to execute.
+			symbolTableCell symbolTable[32]; //symbolTable 
 
-			list<int> frameIds;			//List of frame Ids that the process uses
+			list<Frame> frames;			//List of frames that the process uses.
 
 			void incrementLine(){ //Function for incrementing current line and the instruction pointer.
 				currLine++; 	//Increment the integer counter for line
@@ -64,9 +67,6 @@ namespace process{
 				localtime_s(&timestamp, &startTime); //Turn epoch time to calendar time
 				core = coreId;
 			}
-
-			//maybe
-			//void resume(){}
 
 			void end(){
 				time(&finishTime);
@@ -149,13 +149,13 @@ namespace process{
 							commands.push_back("print(Hello World from " + pname + ")");
 							break;
 						case 1:
-							commands.push_back("declare(var,value)");
+							commands.push_back("declare var 1");
 							break;
 						case 2:
-							commands.push_back("add(var1,var2,var3)");
+							commands.push_back("add var1 var2 var3");
 							break;
 						case 3:
-							commands.push_back("subtract(var1,var2,var3)");
+							commands.push_back("subtract var1 var2 var3");
 							break;
 						case 4:
 							commands.push_back("sleep(50)");
@@ -172,12 +172,93 @@ namespace process{
 				
 			}; //default Constructor
 
+			void AddToTableUsingIdentifier(string var, string val){
+				for(symbolTableCell stc : symbolTable){
+					if(stc.identifier.empty() && stc.address.empty()){
+						stc.identifier = var;
+						stc.val = static_cast<uint16_t>(std::stoi(val));
+						return;
+					}
+				}
+				//only reaches here if the add fails
+				cout << "[AddUsingId] Oh no" << endl;
+			}
+
+			void ReadFromAddress(string var, string addr){
+				uint16_t value = 0;
+				for(symbolTableCell stc : symbolTable){
+					if(stc.address == addr){
+						value = stc.val;
+					}
+				}
+				UpdateTableUsingIdentifier(var, value);
+			}
+
+			void WriteToAddress(string var, string addr){
+				for(symbolTableCell stc : symbolTable){
+					if(stc.identifier.empty() && stc.address.empty()){
+						stc.address = addr;
+						stc.val = RetrieveValueUsingIdentifier(var);
+						return;
+					}
+				}
+
+				//only reaches here if the add fails
+				cout << "[Write]Oh no" << endl;
+			}
+
+
+			void UpdateTableUsingIdentifier(string var, string val){
+				for(symbolTableCell stc : symbolTable){
+					if(stc.identifier == var){
+						stc.val = static_cast<uint16_t>(std::stoi(val));
+						return;
+					}
+				}
+				//only reaches here if the add fails
+				cout << "[UpdateUsingId1]Oh no" << endl;
+			}
+
+			void UpdateTableUsingIdentifier(string var, uint16_t i){
+				cout << "updating with " << var << ": " << i << endl;
+				for(symbolTableCell stc : symbolTable){
+					if(stc.identifier == var){
+						stc.val = i;
+						return;
+					}
+				}
+				//only reaches here if the add fails
+				cout << "[UpdateUsingId2]Oh no" << endl;
+			}
+
+			uint16_t RetrieveValueUsingIdentifier(string var){
+				for(symbolTableCell stc : symbolTable){
+					if(stc.identifier == var){
+						cout << "was able to check" << endl;
+						return stc.val;
+					}
+				}
+				AddToTableUsingIdentifier(var, "0"); //Add variable with value 0 to the table.
+				return 0;
+			}
+
+			void AddVars(string dest, string arg1, string arg2){
+				UpdateTableUsingIdentifier(dest, RetrieveValueUsingIdentifier(arg1) + RetrieveValueUsingIdentifier(arg2));
+			}
+
+			void SubtractVar(string dest, string arg1, string arg2){
+				//maybe add check that this doesn't go negative?
+				UpdateTableUsingIdentifier(dest, RetrieveValueUsingIdentifier(arg1) - RetrieveValueUsingIdentifier(arg2));
+			}
+
+			
+
 		private:
 			heap* pHeap;				//Pointer for the heap
 			stack* pStack;				//Pointer for the stack
-			symbolTable* pSymbolTable;	//Pointer for the symbol table
-			subroutine* pSubRoutine;	//Pointer for the subroutine
-			library* libraries;			//Pointer for the libraries
+			//symbolTable* pSymbolTable;	//Pointer for the symbol table
+			//subroutine* pSubRoutine;	//Pointer for the subroutine
+			//library* libraries;			//Pointer for the libraries
 			instruction* instructions; 	//Pointer for the lines of code/instructions of the process.
 	};
 }

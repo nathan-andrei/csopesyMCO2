@@ -15,6 +15,7 @@
 #include <iomanip>
 #include "process.h"
 #include <set>
+#include "frame.h"
 
 using std::vector;
 using std::map;
@@ -27,14 +28,6 @@ using std::ofstream;
 
 
 namespace memoryAllocator {
-
-    struct Frame {
-        int id;
-        int startAddress;
-        int endAddress;
-        string pid = "";
-    };
-
 
 	// helper function to get timestamp
 string getCurrentTimestamp() {
@@ -173,7 +166,7 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, double m
             if (startFrameId != -1) {
                 for (int i = startFrameId; i < startFrameId + numNeededFrames; ++i) {
                     frames[i].pid = p.pname;
-                    p.frameIds.push_back(i);
+                    p.frames.push_back(frames[i]);
                 }
                 return true;
             } else {
@@ -182,12 +175,12 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, double m
         }
 
         void DeallocateProcess(process::Process& p) {
-            for (int frameId : p.frameIds) {
-                if (frameId >= 0 && frameId < frames.size()) {
-                    frames[frameId].pid.clear();
+            for (Frame f : p.frames) {
+                if (f.id >= 0 && f.id < frames.size()) {
+                    frames[f.id].pid.clear();
                 }
             }
-            p.frameIds.clear();
+            p.frames.clear();
         }
     };
 
