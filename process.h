@@ -220,7 +220,6 @@ namespace process{
 			}
 
 			void UpdateTableUsingIdentifier(string var, uint16_t i){
-				cout << "updating with " << var << ": " << i << endl;
 				for(symbolTableCell stc : symbolTable){
 					if(stc.identifier == var){
 						stc.val = i;
@@ -228,13 +227,12 @@ namespace process{
 					}
 				}
 				//only reaches here if the add fails
-				cout << "[UpdateUsingId2]Oh no" << endl;
+				//cout << "[UpdateUsingId2]Oh no" << endl;
 			}
 
 			uint16_t RetrieveValueUsingIdentifier(string var){
 				for(symbolTableCell stc : symbolTable){
 					if(stc.identifier == var){
-						cout << "was able to check" << endl;
 						return stc.val;
 					}
 				}

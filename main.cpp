@@ -175,13 +175,13 @@ int main(){
 }
 
 // Implementation for continuous process generation
-void MainConsole::startProcessGenerator() {
+void MainConsole::startProcessGenerator(int i, string s, int mem) {
     if (generatingProcesses) {
         std::cout << "Process generator already running.\n";
         return;
     }
     generatingProcesses = true;
-    processGeneratorThread = std::thread(&MainConsole::processGeneratorLoop, this);
+    processGeneratorThread = std::thread(&MainConsole::processGeneratorLoop, this, i, s, mem);
     std::cout << "[scheduler -start] Process generator started.\n";
 }
 
@@ -197,16 +197,26 @@ void MainConsole::stopProcessGenerator() {
     std::cout << "[scheduler -stop] Process generator stopped.\n";
 }
 
-void MainConsole::processGeneratorLoop() {
-    while (generatingProcesses) {
+void MainConsole::processGeneratorLoop(int i, string s, int mem) {
+    int numLoops = 0;
+    while (generatingProcesses && (numLoops < i || i == 0)) {
         Console console;
         consoleMade++;
-        console.process = Process("process_" + std::to_string(consoleMade), consoleMade, minIns, maxIns);
+        if(i != 0)
+            console.process = Process(s, consoleMade, minIns, maxIns);
+        else
+            console.process = Process("process_" + std::to_string(consoleMade), consoleMade, minIns, maxIns);
         {
             std::lock_guard<std::mutex> lock(queueMutex);
             processQueue.push_back(console);
+            //if(i != 0) this->handoff = &processQueue.back();
         }
         cv.notify_one();
+        if(i != 0) numLoops++;
+        //if(numLoops >= i && i != 0){
+        //    generatingProcesses = false;
+        //}
+
         std::this_thread::sleep_for(milliseconds(batchProcessFreq));
     }
 }

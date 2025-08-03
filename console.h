@@ -185,9 +185,9 @@ namespace console{
 
             std::atomic<bool> generatingProcesses{false};
             std::thread processGeneratorThread;
-            void startProcessGenerator();
+            void startProcessGenerator(int i = 0, string s = "", int mem = 16);
             void stopProcessGenerator();
-            void processGeneratorLoop();
+            void processGeneratorLoop(int i = 0, string s = "", int mem = 16);
 
              memoryAllocator::MemoryAllocator memManager;
             void drawHeader(){
@@ -228,7 +228,7 @@ namespace console{
                     {
                         std::unique_lock<std::mutex> lock(queueMutex);
                         cv.wait(lock, [this] { return !processQueue.empty() || !running; });
-                        if (!running && processQueue.empty()) return;
+                        //if (!running && processQueue.empty()) return;
 
                         // Atomic fetch and pop
                         console = processQueue.front();
@@ -247,17 +247,25 @@ namespace console{
 
                             // Update internal `console` state
                             if(!console.process.commands.empty()) {
-                                console.handleInput(console.process.commands.front());
-                                console.process.commands.pop_front();
+                                try{
+                                    console.handleInput(console.process.commands.front());
+                                    console.process.commands.pop_front();
+                                }catch(std::exception e){
+                                    cout << "error with somethign?? " << e.what() << endl;
+                                };
                             }
                             console.process.currLine += 1;
                             // Also update the copy in runningProcesses
                             for (auto& proc : runningProcesses) {
                                 if (proc.process.core == console.process.core) {
-                                    proc.process.currLine = console.process.currLine;
-                                    if(!proc.process.commands.empty()) proc.process.commands.pop_front();
-                                    proc.process.log = console.process.log; // Update log
-                                    break;
+                                    try{
+                                        proc.process.currLine = console.process.currLine;
+                                        if(!proc.process.commands.empty()) proc.process.commands.pop_front();
+                                        proc.process.log = console.process.log; // Update log
+                                        break;
+                                    }catch(std::exception e){
+                                        cout << "error with somethign?? " << e.what() << endl;
+                                    };
                                 }
                             }
                         }
@@ -378,13 +386,13 @@ namespace console{
             }
 
             void cmdScreenHelp(){
-                cout << "usage: screen [-ls] [-s <process name>] [-r <process name>]" << endl;
+                cout << "usage: screen [-ls] [-s <process name> <process memory size>] [-r <process name>]" << endl;
                 cout << "Options:" << endl;
                 cout << "\t" << "-ls" << "\t\t\t" << "List all the processes" << endl;
-                cout << "\t" << "-s" << "\t\t\t" << "Start a new process with the process name." << endl;
+                cout << "\t" << "-s" << "\t\t\t" << "Start a new process with the process name and memory size (must be in 2^n format. [2^6, 2^16]])" << endl;
                 cout << "\t" << "-r" << "\t\t\t" << "Redraw/resume session of a process" << endl;
             }
-            Console* addNewProcess(string name){ //func for adding a new process - Only called when doing screen -s
+            void addNewProcess(string name){ //func for adding a new process - Only called when doing screen -s
                 /*
                 int newPID = consoleMade + 1;
                 consoleMade += 1;
@@ -392,16 +400,11 @@ namespace console{
                 processQueue.push_back(Console(Process(name, newPID, minIns, maxIns))); //add a new console to the end of the console list with the associated process.
                 return &processQueue.back(); //return the created console
                 */
-                Console console;
-
                 consoleMade++;
-                console.process = Process("process_" + std::to_string(consoleMade), consoleMade, minIns, maxIns);
                 {
-                    std::lock_guard<std::mutex> lock(queueMutex);
-                    processQueue.push_back(console);
+                    processQueue.push_back(Console(Process(name, consoleMade, minIns, maxIns)));
                 }
                 cv.notify_one();
-                return &processQueue.back(); //return the created console
             }
             Console* searchList(string name){ //used to search through the console list
                 for(Console &c : processQueue){
@@ -708,8 +711,6 @@ namespace console{
 
         char command[64] = {0}, arg1[64] = {0}, arg2[64] = {0}, arg3[64] = {0};
 
-        bool valid3Arg = false;
-
         if(s.find("PRINT") != string::npos || s.find("print") != string::npos){     //PRINT
             regex checkValid("(?:PRINT|print)\\s{0,1}\\((.*?)\\)");
             regex checkSolo("(.*)(?:print|PRINT)(.*)");
@@ -728,32 +729,27 @@ namespace console{
             }
         }
         else if(sscanf(s.c_str(), "%s %s %s %s", command, arg1, arg2, arg3) == 4){
-            cout << "arg1 " << arg1 << " arg2 " << arg2 << " arg3 " << arg3 << endl;
             if(strcmp(command, "add") == 0 || strcmp(command, "ADD") == 0){
-                cout << "entered add" << endl;
                 process.AddVars(arg1, arg2, arg3);
             }
             else if(strcmp(command, "subtract") == 0 || strcmp(command, "SUBTRACT") == 0){
-            cout << "entered subtract" << endl;
                 process.SubtractVar(arg1, arg2, arg3);
             }
+            else   
+                handleProcessCalls(s); //IS HERE BECAUSE IT CAPTURES SCREEN -S <PROC_NAME> <mem_size> and other 3 token commands
         }
         else if(sscanf(s.c_str(), "%s %s %s %s", command, arg1, arg2, arg3) == 3){
             if(strcmp(command, "declare") == 0 || strcmp(command, "DECLARE") == 0){
-                cout << "entered declare" << endl;
                 process.AddToTableUsingIdentifier(arg1, arg2);
-                valid3Arg = true;
             }
             else if(strcmp(command, "read") == 0 || strcmp(command, "READ") == 0){
-                cout << "entered read" << endl;
                 process.ReadFromAddress(arg1, arg2);
-                valid3Arg = true;
             }
             else if(strcmp(command, "write") == 0 || strcmp(command, "WRITE") == 0){
-                cout << "entered write" << endl;
                 process.WriteToAddress(arg1, arg2);
-                valid3Arg = true;
             }
+            else   
+                handleProcessCalls(s); //IS HERE BECAUSE IT CAPTURES SCREEN -S <PROC_NAME> and other 3 token commands
         }
         /*
         if(sscanf("%s %s %s %s", command, arg1, arg2, arg3) && !valid3Arg){
@@ -765,7 +761,7 @@ namespace console{
             }
         }*/
         
-        else if(s.find("SLEEP") != string::npos || s.find("sleep") != string::npos  && !valid3Arg){         //SLEEP
+        else if(s.find("SLEEP") != string::npos || s.find("sleep") != string::npos){         //SLEEP
             regex checkValid("(?:SLEEP|sleep)\\s{0,1}\\((.*?)\\)");
             regex checkSolo("(.*)(?:SLEEP|sleep)(.*)");
             if(std::regex_match(s, checkValid)){;
@@ -775,11 +771,11 @@ namespace console{
                 cmdSleepHelp();
             }
         }
-        else if(s.find("FOR") != string::npos || s.find("for") != string::npos  && !valid3Arg){         //FOR
+        else if(s.find("FOR") != string::npos || s.find("for") != string::npos){         //FOR
             //I DON'T KNOW AHUHU
             //cmdForHelp();
         }
-        else if(!valid3Arg){
+        else{
             handleProcessCalls(s);
         }
     }
@@ -838,6 +834,7 @@ namespace console{
                 cmdHelp();
             }
             else if (strcmp(tokens.front().c_str(), "scheduler-start") == 0) {
+                stopProcessGenerator();
                 startProcessGenerator();
                 std::cout << "Process generation started.\n";
             } 
@@ -859,14 +856,23 @@ namespace console{
             else if(tokens.front() == "screen"){
                 //check for the flags
                 tokens.pop_front(); //iterate to the next token, which is the flag (-s and -r)
-
                 if(!tokens.empty() && (tokens.front() == "-s" || tokens.front() == "-r" || tokens.front() == "-ls")){
                     if(tokens.front() == "-s"){
                         tokens.pop_front(); //iterate to the process name;
                         if(!tokens.empty()){ //check if the string is null
-                            handoff = addNewProcess(tokens.front());
-                            cout << handoff;
-                            clear();
+                            //std::lock_guard<std::mutex> lock(queueMutex);
+                            //addNewProcess(tokens.front());
+                            //handoff = &processQueue.back();
+                            //cout << handoff;
+                            //clear();
+                            string name = tokens.front();
+                            if(!tokens.empty()){
+                                tokens.pop_front(); //iterate to mem size
+                                stopProcessGenerator();  //jic
+                                startProcessGenerator(1, name, std::stoi(tokens.front()));
+                            }
+                            else
+                                cmdScreenHelp();
                         }
                         else 
                             cmdScreenHelp();
