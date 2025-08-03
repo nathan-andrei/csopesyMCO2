@@ -17,6 +17,7 @@
 
 #include "process.h" //This is for the process class
 #include "memoryAllocator.h" //This is for the memory allocator class
+#include "frame.h"
 
 using std::left;
 using std::right;
@@ -308,7 +309,7 @@ namespace console{
                 }
             
                 // If not allocated memory yet, try allocating
-                if (current.process.frameIds.empty()) {
+                if (current.process.frames.empty()) {
                     bool success = memManager.AllocateProcess(current.process);
                     if (!success) {
                         // Not enough memory; send back to end of queue
@@ -350,7 +351,7 @@ namespace console{
                 // Exit condition: nothing in queue and memory is empty
                 {
                     std::lock_guard<std::mutex> lock(queueMutex);
-                    bool memoryEmpty = std::all_of(memManager.frames.begin(), memManager.frames.end(), [](const memoryAllocator::Frame& f) {
+                    bool memoryEmpty = std::all_of(memManager.frames.begin(), memManager.frames.end(), [](const Frame& f) {
                         return f.pid.empty();
                     });
 
@@ -384,11 +385,22 @@ namespace console{
                 cout << "\t" << "-r" << "\t\t\t" << "Redraw/resume session of a process" << endl;
             }
             Console* addNewProcess(string name){ //func for adding a new process - Only called when doing screen -s
-                
+                /*
                 int newPID = consoleMade + 1;
                 consoleMade += 1;
                 
                 processQueue.push_back(Console(Process(name, newPID, minIns, maxIns))); //add a new console to the end of the console list with the associated process.
+                return &processQueue.back(); //return the created console
+                */
+                Console console;
+
+                consoleMade++;
+                console.process = Process("process_" + std::to_string(consoleMade), consoleMade, minIns, maxIns);
+                {
+                    std::lock_guard<std::mutex> lock(queueMutex);
+                    processQueue.push_back(console);
+                }
+                cv.notify_one();
                 return &processQueue.back(); //return the created console
             }
             Console* searchList(string name){ //used to search through the console list
@@ -691,6 +703,13 @@ namespace console{
         //handle system calls first, then hand over the string to processcalls
         std::ostringstream output;
 
+        s.erase(std::remove(s.begin(), s.end(), '\n'), s.cend());
+        s.erase(std::remove(s.begin(), s.end(), '\r'), s.cend());
+
+        char command[64] = {0}, arg1[64] = {0}, arg2[64] = {0}, arg3[64] = {0};
+
+        bool valid3Arg = false;
+
         if(s.find("PRINT") != string::npos || s.find("print") != string::npos){     //PRINT
             regex checkValid("(?:PRINT|print)\\s{0,1}\\((.*?)\\)");
             regex checkSolo("(.*)(?:print|PRINT)(.*)");
@@ -708,61 +727,45 @@ namespace console{
                 cmdPrintHelp();
             }
         }
-        else if(s.find("DECLARE") != string::npos || s.find("declare") != string::npos){         //DECLARE
-            regex checkValid("(?:DECLARE|declare)\\s{0,1}\\((\\w*?),(\\w*?)\\)");
-            regex checkSolo("(.*)(?:declare|declare)(.*)"); 
-            if(std::regex_match(s, checkValid)){;
-                //variable name = regex_replace(s, checkValid, "$1");   //ADD THE SYMTABLE??
-                //variable value = regex_replace(s, checkValid, "$2");
-                //symtable.set(name, value);
+        else if(sscanf(s.c_str(), "%s %s %s %s", command, arg1, arg2, arg3) == 4){
+            cout << "arg1 " << arg1 << " arg2 " << arg2 << " arg3 " << arg3 << endl;
+            if(strcmp(command, "add") == 0 || strcmp(command, "ADD") == 0){
+                cout << "entered add" << endl;
+                process.AddVars(arg1, arg2, arg3);
             }
-            else if(std::regex_match(s, checkSolo)){
-                //cmdDeclareHelp();
-            }
-        }
-        else if(s.find("ADD") != string::npos || s.find("add") != string::npos){         //ADD
-            regex checkValid("(?:ADD|add)\\s{0,1}\\((\\w*?),(\\w*?),(\\w*?)\\)");
-            regex checkSolo("(.*)(?:ADD|add)(.*)"); 
-            if(std::regex_match(s, checkValid)){;
-                //variable v1 = regex_replace(s, checkValid, "$1") << endl; 
-                //variable v2 = regex_replace(s, checkValid, "$2") << endl;
-                //variable v3 = regex_replace(s, checkValid, "$3") << endl;
-                //int value2 = hold the data of v2 (esp if variable)
-                //inv value3 = hold the data of v3 (esp if variable)
-
-                //symtable.check(v1) <- check if the name v1 is a variable, if not then do symtable.declare(v1, 0);
-                //check if v2 is an int. If it isn't, check it in the symtable. If so, then value2 = symtable.get(v2); If it's not there, then do symtable.declare(v2, 0) and value2 = 0;
-                //check if v3 is an int. If it isn't, check it in the symtable. If so, then value2 = symtable.get(v3); If it's not there, then do symtable.declare(v2, 0) and value3 = 0;
-
-                //symtable.update(v1, value2 + value3);
-
-            }
-            else if(std::regex_match(s, checkSolo)){
-                cmdAddHelp();
+            else if(strcmp(command, "subtract") == 0 || strcmp(command, "SUBTRACT") == 0){
+            cout << "entered subtract" << endl;
+                process.SubtractVar(arg1, arg2, arg3);
             }
         }
-        else if(s.find("SUBTRACT") != string::npos || s.find("subtract") != string::npos){   //SUBTRACT
-            regex checkValid("(?:SUBTRACT|subtract)\\s{0,1}\\((\\w*?),(\\w*?),(\\w*?)\\)");
-            regex checkSolo("(.*)(?:SUBTRACT|subtract)(.*)"); 
-            if(std::regex_match(s, checkValid)){;
-                //variable v1 = regex_replace(s, checkValid, "$1") << endl; 
-                //variable v2 = regex_replace(s, checkValid, "$2") << endl;
-                //variable v3 = regex_replace(s, checkValid, "$3") << endl;
-                //int value2 = hold the data of v2 (esp if variable)
-                //inv value3 = hold the data of v3 (esp if variable)
-
-                //symtable.check(v1) <- check if the name v1 is a variable, if not then do symtable.declare(v1, 0);
-                //check if v2 is an int. If it isn't, check it in the symtable. If so, then value2 = symtable.get(v2); If it's not there, then do symtable.declare(v2, 0) and value2 = 0;
-                //check if v3 is an int. If it isn't, check it in the symtable. If so, then value2 = symtable.get(v3); If it's not there, then do symtable.declare(v2, 0) and value3 = 0;
-
-                //symtable.update(v1, value2 - value3);
-
+        else if(sscanf(s.c_str(), "%s %s %s %s", command, arg1, arg2, arg3) == 3){
+            if(strcmp(command, "declare") == 0 || strcmp(command, "DECLARE") == 0){
+                cout << "entered declare" << endl;
+                process.AddToTableUsingIdentifier(arg1, arg2);
+                valid3Arg = true;
             }
-            else if(std::regex_match(s, checkSolo)){
-                cmdSubtractHelp();
+            else if(strcmp(command, "read") == 0 || strcmp(command, "READ") == 0){
+                cout << "entered read" << endl;
+                process.ReadFromAddress(arg1, arg2);
+                valid3Arg = true;
+            }
+            else if(strcmp(command, "write") == 0 || strcmp(command, "WRITE") == 0){
+                cout << "entered write" << endl;
+                process.WriteToAddress(arg1, arg2);
+                valid3Arg = true;
             }
         }
-        else if(s.find("SLEEP") != string::npos || s.find("sleep") != string::npos){         //SLEEP
+        /*
+        if(sscanf("%s %s %s %s", command, arg1, arg2, arg3) && !valid3Arg){
+            if(strcmp(command, "add") == 0 || strcmp(command, "ADD")){
+                process.AddVars(arg1, arg2, arg3);
+            }
+            else if(strcmp(command, "add") == 0 || strcmp(command, "ADD")){
+                process.AddVars(arg1, arg2, arg3);
+            }
+        }*/
+        
+        else if(s.find("SLEEP") != string::npos || s.find("sleep") != string::npos  && !valid3Arg){         //SLEEP
             regex checkValid("(?:SLEEP|sleep)\\s{0,1}\\((.*?)\\)");
             regex checkSolo("(.*)(?:SLEEP|sleep)(.*)");
             if(std::regex_match(s, checkValid)){;
@@ -772,11 +775,11 @@ namespace console{
                 cmdSleepHelp();
             }
         }
-        else if(s.find("FOR") != string::npos || s.find("for") != string::npos){         //FOR
+        else if(s.find("FOR") != string::npos || s.find("for") != string::npos  && !valid3Arg){         //FOR
             //I DON'T KNOW AHUHU
-            cmdForHelp();
+            //cmdForHelp();
         }
-        else{
+        else if(!valid3Arg){
             handleProcessCalls(s);
         }
     }
@@ -883,12 +886,6 @@ namespace console{
                 }
                 else
                     cmdScreenHelp();
-            }
-            else if(tokens.front() == "scheduler-test"){
-                cout << s << placeholder << endl;
-            }
-            else if(tokens.front() == "scheduler-stop"){
-                cout << s << placeholder << endl;
             }
             else if(tokens.front() == "report-util"){
                 printProcessesToFile();

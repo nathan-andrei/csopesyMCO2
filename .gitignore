@@ -418,5 +418,5 @@ FodyWeavers.xsd
 *.msp
 
 #Output from running the file
-csopesy-backing-store.txt
+*.txt
 *.exe
