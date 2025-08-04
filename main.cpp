@@ -82,9 +82,9 @@ Config configSetup() {
             } else if (strcmp(key, "mem-per-frame") == 0) {
                 config.mem_per_frame = atoi(value);
             } else if (strcmp(key, "min-mem-per-proc") == 0) {
-                config.mem_per_proc = atoi(value);
+                config.min_mem_per_proc = atoi(value);
             } else if (strcmp(key, "max-mem-per-proc") == 0) {
-                config.mem_per_proc = atoi(value);
+                config.max_mem_per_proc = atoi(value);
             } else {
                 std::cerr << "Unknown config key: " << key << std::endl;
             }
@@ -117,7 +117,7 @@ int main(){
     MainConsole mainConsole(config.num_cpu, config.scheduler, config.quantum_cycles, 
                             config.batch_process_freq, config.min_ins, 
                             config.max_ins, config.delay_per_exec,
-                            config.max_overall_mem, config.mem_per_frame, config.mem_per_proc);
+                            config.max_overall_mem, config.mem_per_frame, config.min_mem_per_proc, config.max_mem_per_proc);
 	//MainConsole mainConsole(NUM_CPU, SCHEDULER, QUANTUM_CYCLES, BATCH_PROCESS_FREQ, MIN_INS, MAX_INS, DELAY_PER_EXEC);
 	Console* console = &mainConsole; //holds the current active console, initialized to main Menu as it's the root
 	Console* temp = NULL;
@@ -167,9 +167,9 @@ int main(){
 		std::this_thread::sleep_for(milliseconds(1)); 
 	}
 
-	// Wait for scheduler and cores to finish
-	sched.join();
-    for (auto& t : mainConsole.cores) t.join();
+	// Detach the threads so we don't wait on them because they have while(true) loops
+	sched.detach();
+    for (auto& t : mainConsole.cores) t.detach();
 
     return 0;
 }
@@ -203,9 +203,9 @@ void MainConsole::processGeneratorLoop(int i, string s, int mem) {
         Console console;
         consoleMade++;
         if(i != 0)
-            console.process = Process(s, consoleMade, minIns, maxIns);
+            console.process = Process(s, consoleMade, minIns, maxIns, mem);
         else
-            console.process = Process("process_" + std::to_string(consoleMade), consoleMade, minIns, maxIns);
+            console.process = Process("process_" + std::to_string(consoleMade), consoleMade, minIns, maxIns, minMemPerProc, maxMemPerProc);
         {
             std::lock_guard<std::mutex> lock(queueMutex);
             processQueue.push_back(console);

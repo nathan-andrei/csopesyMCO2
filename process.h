@@ -56,6 +56,7 @@ namespace process{
 			symbolTableCell symbolTable[32]; //symbolTable 
 
 			list<Frame> frames;			//List of frames that the process uses.
+			int size;
 
 			void incrementLine(){ //Function for incrementing current line and the instruction pointer.
 				currLine++; 	//Increment the integer counter for line
@@ -137,9 +138,13 @@ namespace process{
 				lineCount = rand() % (200 - 50 + 1) + 50; //picks a random linecount between 50 and 200 UPDATE TO TAKE FROM THE CONFIG INSTEAD
 			}
 
-			Process(string name, int id, int minins, int maxins) : pname(name), pid(id){
+			Process(string name, int id, int minins, int maxins, int mem = -1, int memmax = -1) : pname(name), pid(id){
 				time(&arrivalTime); //Log when the process was started
 				localtime_s(&arrivalTimeStamp, &arrivalTime); //Turn epoch time to calendar time
+
+				if(mem != -1) size = mem; //mem got passed by screen -s/-c
+				else	size = rand() % (memmax - mem + 1) + mem; //if max memory is passed, assume that mem is min max
+
 				lineCount = rand() % (maxins - minins + 1) + minins; 
 					int k = 0;
 				for(int i = 0; i < lineCount; i++){
@@ -247,6 +252,10 @@ namespace process{
 			void SubtractVar(string dest, string arg1, string arg2){
 				//maybe add check that this doesn't go negative?
 				UpdateTableUsingIdentifier(dest, RetrieveValueUsingIdentifier(arg1) - RetrieveValueUsingIdentifier(arg2));
+			}
+
+			int getMemorySize(){
+				return frames.size();
 			}
 
 			
