@@ -419,4 +419,5 @@ FodyWeavers.xsd
 
 #Output from running the file
 *.txt
+config.txt
 *.exe
