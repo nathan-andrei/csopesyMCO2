@@ -170,7 +170,8 @@ namespace console{
 
             int maxOverallMem;
             int memPerFrame;
-            double memPerProc;
+            int minMemPerProc;
+            int maxMemPerProc;
 
             int numFrames;
             
@@ -209,7 +210,7 @@ namespace console{
                 drawHeader();
                 printProcesses();
             }
-            MainConsole(int nCpu, string sched, int qc, int bpf, int min, int max, int delay,int maxMem, int memPerFrame, double memPerProc) : numCPU(nCpu), scheduler(sched), quantumCycles(qc), batchProcessFreq(bpf), minIns(min), maxIns(max), delayPerExec(delay), memManager(maxMem, memPerFrame, memPerProc) {
+            MainConsole(int nCpu, string sched, int qc, int bpf, int min, int max, int delay,int maxMem, int memPerFrame, int minmemPerProc, int maxmemPerProc) : numCPU(nCpu), scheduler(sched), quantumCycles(qc), batchProcessFreq(bpf), minIns(min), maxIns(max), delayPerExec(delay), memManager(maxMem, memPerFrame), minMemPerProc(minmemPerProc), maxMemPerProc(maxmemPerProc) {
                 mainConsole = true;
                 // Start CPU cores
                 for (int i = 0; i < numCPU; ++i) {
@@ -225,7 +226,7 @@ namespace console{
                 while (running) {
                     Console console;
 
-                    {
+                    {   //This block is the source of cpuWorker yoinking processes before scheduler
                         std::unique_lock<std::mutex> lock(queueMutex);
                         cv.wait(lock, [this] { return !processQueue.empty() || !running; });
                         //if (!running && processQueue.empty()) return;
@@ -235,11 +236,22 @@ namespace console{
                         processQueue.pop_front();
                     }
 
-                    {
+                    {   //I was also trying to replace this 
                         std::lock_guard<std::mutex> lock(processStatusMutex);
                         console.process.start(coreId);
                         runningProcesses.push_back(console);
                     }
+
+                    /* I was trying to make this work
+                    {
+                        std::unique_lock<mutex> lock(queueMutex);
+
+                        //maybe we have a cv that waits for the scheduler to say ok before the core takes from the runningqueue (running because scheduler already allocated and let it run)
+                        cv.wait(lock, [this] {return !runningProcesses.empty() || !running;});
+                        console = runningProcesses.front();
+                        //?? idk if we should be popping or not
+                        
+                    }*/
 
                     for (int i = 0; i < console.process.lineCount; ++i) {
                         {
@@ -282,7 +294,7 @@ namespace console{
                                 }),
                             runningProcesses.end()
                         );
-
+                        
                         console.process.end();
                         finishedProcesses.push_back(console);
                     }
@@ -312,21 +324,37 @@ namespace console{
                 {
                     std::unique_lock<std::mutex> lock(queueMutex);
                     cv.wait(lock, [&] { return !processQueue.empty(); });
+                    //cout << "Got process" << endl;
                     current = processQueue.front();
                     processQueue.pop_front();
                 }
             
                 // If not allocated memory yet, try allocating
                 if (current.process.frames.empty()) {
+                    //cout << "allocating!!" << endl;
                     bool success = memManager.AllocateProcess(current.process);
                     if (!success) {
                         // Not enough memory; send back to end of queue
+                        cout << "not success" << endl;
                         std::lock_guard<std::mutex> lock(queueMutex);
                         processQueue.push_back(current);
                         cv.notify_one();
                         std::this_thread::sleep_for(milliseconds(1));
                         continue;
                     }
+                    //update the memory management
+                    for (auto& proc : runningProcesses) {
+                                if (proc.process.core == current.process.core) {
+                                    try{
+                                        proc.process.frames = current.process.frames;
+                                        proc.process.size = current.process.size;
+                                        break;
+                                    }catch(std::exception e){
+                                        cout << "error with somethign?? " << e.what() << endl;
+                                    };
+                                }
+                            }
+                    cout << "allocated!" << endl;
                 }
                 
                 // Simulate execution for up to `quantumCycles`
@@ -339,22 +367,22 @@ namespace console{
                 quantumCounter++;
 
                 // Take snapshot
-                //writeMemorySnapshot(quantumCounter, memManager.frames, memManager.memoryPerProcess, memManager.memoryPerFrame);
-                std::cout << "RAH " << current.process.pid << std::endl;
+                //memoryAllocator::writeMemorySnapshot(quantumCounter, memManager.frames, memManager.memoryPerFrame);
+                //std::cout << "RAH " << current.process.pid << std::endl;
                 // If done, deallocate memory
                 if (current.process.currLine >= current.process.lineCount) {
-                    std::cout << "maybe. " << current.process.pid << std::endl;
+                    //std::cout << "maybe. " << current.process.pid << std::endl;
                     current.process.end();
-                    std::cout << "yes." << std::endl;
+                    //std::cout << "yes." << std::endl;
                     memManager.DeallocateProcess(current.process);
-                    std::cout << "no." << std::endl;
+                    //std::cout << "no." << std::endl;
                 } else {
-                    std::cout << "HUH!ASDADWD " << current.process.pid << std::endl;
+                    //std::cout << "HUH!ASDADWD " << current.process.pid << std::endl;
                     std::lock_guard<std::mutex> lock(queueMutex);
                     processQueue.push_back(current);
                     cv.notify_one();
                 }
-                std::cout << "meow " << current.process.pid << std::endl;
+                //std::cout << "meow " << current.process.pid << std::endl;
 
                 // Exit condition: nothing in queue and memory is empty
                 {
@@ -392,7 +420,7 @@ namespace console{
                 cout << "\t" << "-s" << "\t\t\t" << "Start a new process with the process name and memory size (must be in 2^n format. [2^6, 2^16]])" << endl;
                 cout << "\t" << "-r" << "\t\t\t" << "Redraw/resume session of a process" << endl;
             }
-            void addNewProcess(string name){ //func for adding a new process - Only called when doing screen -s
+            void addNewProcess(string name){ //func for adding a new process - Only called when doing screen -s UNUSED DUE TO BUGGY: doesn't get caught by scheduler
                 /*
                 int newPID = consoleMade + 1;
                 consoleMade += 1;
@@ -400,11 +428,13 @@ namespace console{
                 processQueue.push_back(Console(Process(name, newPID, minIns, maxIns))); //add a new console to the end of the console list with the associated process.
                 return &processQueue.back(); //return the created console
                 */
+                /*
                 consoleMade++;
                 {
                     processQueue.push_back(Console(Process(name, consoleMade, minIns, maxIns)));
                 }
                 cv.notify_one();
+                */
             }
             Console* searchList(string name){ //used to search through the console list
                 for(Console &c : processQueue){
@@ -481,7 +511,11 @@ namespace console{
             cout << left << "\t" << setw(8) << "Core";
         cout << left << "\t" << setw(15) << "Current Line";
         cout << left << "\t" << setw(15) << "Total Lines";
-        cout << left << "\t" << setw(17) << "Progress" << endl;
+        cout << left << "\t" << setw(17) << "Progress";
+        if(withCore)
+            cout << left << "\t" << setw(15) << "Memory Utilization" << endl;
+        else
+            cout << endl;
 
         if(!list.empty()){
             for(Console c : list){
@@ -508,7 +542,12 @@ namespace console{
                 for(int i = percentage / 10; i < 9; i++){
                     cout << "-";
                 }   
-                cout << "]" << endl;
+                cout << "]     ";
+
+                if(withCore)
+                    cout << left << setw(15) << c.process.getMemorySize() * memPerFrame << endl;
+                else 
+                    cout << endl;
             }
         }
         else{
@@ -914,7 +953,8 @@ typedef struct {
     int delay_per_exec;
     int max_overall_mem;
     int mem_per_frame;
-    int mem_per_proc;
+    int min_mem_per_proc;
+    int max_mem_per_proc;
 } Config;
 
 #endif

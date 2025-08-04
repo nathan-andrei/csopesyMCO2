@@ -38,9 +38,10 @@ string getCurrentTimestamp() {
 }
 
 
-void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, double memPerProc, int memPerFrame) {
+void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memPerFrame) {
     string filename = "memory_stamp_" + std::to_string(quantumCycle) + ".txt";
     ofstream file(filename);
+    cout << "writing to file" << endl;
     if (!file.is_open()) {
         std::cerr << "Error: Could not open " << filename << " for writing.\n";
         return;
@@ -55,7 +56,10 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, double m
         if (!frame.pid.empty()) activeProcesses.insert(frame.pid);
     }
     file << "Number of processes in memory: " << activeProcesses.size() << endl;
-    int totalExternalFragBytes = (4 - activeProcesses.size()) * memPerProc;
+
+    //Fix calc, we no longer use memPerProc
+    int totalExternalFragBytes = 0;//(4 - activeProcesses.size()) * memPerProc;
+
     // External fragmentation
     /*double totalExternalFragBytes = 0;
     double contiguousFreeSize = 0;
@@ -85,16 +89,16 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, double m
     file << "Total external fragmentation in KB: " << (totalExternalFragBytes) << " \n" << endl;
 
     // Memory layout
-    file << "----end---- = " << frames.back().endAddress << endl;
+    file << "----end---- = " << frames.back().endAddress_i << endl;
 
     for (int i = frames.size() - 1; i >= 0;) {
         string pid = frames[i].pid;
-        int end = frames[i].endAddress;
+        int end = frames[i].endAddress_i;
         int j = i;
         while (j >= 0 && frames[j].pid == pid) {
             --j;
         }
-        int start = frames[j + 1].startAddress;
+        int start = frames[j + 1].startAddress_i;
 
         if (!pid.empty()) {
             file << end << "\n";
@@ -119,22 +123,24 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, double m
     public:
         int maxMemory;
         int numFrames;
-        int memoryPerProcess;
         int memoryPerFrame;
         vector<Frame> frames;
 
         // Constructor with initialization
-        MemoryAllocator(int maxOverallMemory, int memPerFrame, int memPerProc)
+        MemoryAllocator(int maxOverallMemory, int memPerFrame)
             : maxMemory(maxOverallMemory),
-              memoryPerFrame(memPerFrame),
-              memoryPerProcess(memPerProc) 
+              memoryPerFrame(memPerFrame)
         {
             numFrames = maxMemory / memoryPerFrame;
             for (int i = 0; i < numFrames; ++i) {
                 Frame f;
                 f.id = i;
-                f.startAddress = i * memoryPerFrame;
-                f.endAddress = f.startAddress + memoryPerFrame;
+                f.startAddress_i = i * memoryPerFrame;
+                f.endAddress_i = f.startAddress_i + memoryPerFrame - 1;
+
+                f.startAddress = "0x" + std::to_string(i);
+                f.endAddress = "0x" + std::to_string(i*2);
+
                 f.pid = "";
                 frames.push_back(f);
             }
@@ -143,19 +149,54 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, double m
         // Default constructor
         MemoryAllocator() {}
 
-        // First-Fit allocation
+        // First-Fit allocation: non-contiguous
         bool AllocateProcess(process::Process& p) {
-            int numNeededFrames = memoryPerProcess / memoryPerFrame;
+            int numNeededFrames = p.size / memoryPerFrame;
             int frameCounter = 0;
             int startFrameId = -1;
 
-            // Search for contiguous free frames
+            list<int> idList;
+
+            // Search for free frames
             for (size_t i = 0; i < frames.size(); ++i) {
                 if (frames[i].pid.empty()) {
                     frameCounter++;
-                } else {
-                    frameCounter = 0;
+                    idList.push_back(i);
+                } 
+                if (frameCounter == numNeededFrames) {
+                    break;
                 }
+            }
+
+            if (frameCounter == numNeededFrames) {
+                for (int i : idList) {
+                    frames[i].pid = p.pname;
+                    p.frames.push_back(frames[i]);
+                }
+                /* For debugging.
+                cout << "Allocated to " << p.pname << " are:" << endl;
+                for(int j : idList){
+                    cout << j << endl;
+                }
+                cout << "-----" << endl;*/
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        //First-fit allocation: contigouous
+        bool AllocateProcessContiguous(process::Process& p) {
+            int numNeededFrames = p.size / memoryPerFrame;
+            int frameCounter = 0;
+            int startFrameId = -1;
+
+            // Search for free frames
+            for (size_t i = 0; i < frames.size(); ++i) {
+                if (frames[i].pid.empty()) {
+                    frameCounter++;
+                } 
+                else frameCounter = 0; 
 
                 if (frameCounter == numNeededFrames) {
                     startFrameId = static_cast<int>(i) - numNeededFrames + 1;
