@@ -25,7 +25,7 @@ using std::cout;
 using std::endl;
 using std::string;
 using std::ofstream;
-
+using process::Process;
 
 namespace memoryAllocator {
 
@@ -257,6 +257,8 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
                 }
             }
             p.frames.clear();
+            
+            return ids;
         }
 
         void DeallocateProcess(process::Process& p) {

@@ -19,7 +19,9 @@
 #include "memoryAllocator.h" //This is for the memory allocator class
 #include "frame.h"
 #include "stats.h"
-#include "cpuCore.h" //This is for the cpuCore class
+#include "cpuCore.h"
+
+
 
 using std::left;
 using std::right;
@@ -119,7 +121,7 @@ namespace console{
 
             Console(): process(){}; //For creating main console
 
-            Console(Process p): process(p){} //For consoles for processes       
+            Console(Process p): process(std::move(p)){} //For consoles for processes       
 
             void clear(){
                 system("cls");
@@ -186,7 +188,7 @@ namespace console{
             list<Console> processQueue;
             vector<Console> runningProcesses;
             vector<Console> finishedProcesses;
-            vector<cpuCore> cores;
+            vector<cpucore::cpuCore> cores;
 
             mutex queueMutex;
             mutex processStatusMutex;
@@ -277,33 +279,29 @@ namespace console{
                     //check context switch per core
                     for(int i = 0; i < numCPU; i++){
                         if(!cores[i].running){ //if core is not running, context switch
-                            if(cores[i].processFinished()){ //Make a function that raises a flag if the currLine >= instruction count     
+                            if(cores[i].processFinished()){ //Make a function that raises a flag if the currLine >= instruction count
+                                memManager.DeallocateProcess(cores[i].processToRun->process); //deallocate the process memory
                                 finishedProcesses.push_back(*cores[i].processToRun); //return value rather than the pointer;
 
-                                for(Console c : runningProcesses){ //iterate throught the running proccessess to look for the running process
-                                    if(&c == cores[i].processToRun){
-                                        //remove the console from runningProcess
+                                for (auto it = runningProcesses.begin(); it != runningProcesses.end(); ) {
+                                    if (it->process.pid == cores[i].processToRun->process.pid) {
+                                        it = runningProcesses.erase(it); // returns the next valid iterator
+                                    } else {
+                                        ++it;
                                     }
                                 }
-                            }
-                            else{ //if the core is not yet finished
-                                processQueue.push_front(*cores[i].processToRun); //return value rather than the pointer; Idk if this should push_back or front
-
-                                for(Console c : runningProcesses){ //iterate throught the running proccessess to look for the running process
-                                    if(&c == cores[i].processToRun){
-                                        //remove the console from runningProcess
-                                    }
-                                }
-                            }     
-                            cores[i].stop(); //turn off running and clear the internal pointer
+                            } 
                             
-                            //After updating the queues, get the next console
-                            // - Check processqueue (back) for a new console
-                            // - allocate the memory
-                            // - store the pointer so we don't have to look for it again (e.x. Console* processToRun);
-                            // - pop it into running queue
-                            // - give it to the core
-                            cores[i].startProcess(processToRun);                 
+                        //After updating the queues, get the next console
+                        // - Check processqueue (back) for a new console
+                        // - allocate the memory
+                        if(!processQueue.empty()){
+                            Console* processToRun = &processQueue.back(); //get the last console in the queue and store the pointer so we don't have to look for it again (e.x. Console* processToRun);
+                            processQueue.pop_back(); //remove the last console in the queue
+                            cout << "allocating!!" << endl;
+                            memManager.AllocateProcess(processToRun->process);
+                            runningProcesses.push_back(*processToRun);
+                            cores[i].startProcess(processToRun); // - give it to the core                 
                         }
                         
                     }
@@ -311,77 +309,34 @@ namespace console{
                     //check context switch by quantumSlice
                     if(quantumCounter >= quantumCycles){
                         for(int i = 0; i < numCPU; i++){
-                            //do the same thing you do, but don't check for cores[i].running because we don't care if they are, we'll context switch no matter what
+                            for (auto it = runningProcesses.begin(); it != runningProcesses.end(); ) {
+                                    if (it->process.pid == cores[i].processToRun->process.pid) {
+                                        it = runningProcesses.erase(it); // returns the next valid iterator
+                                    } else {
+                                        ++it;
+                                    }
+                            }
+                            processQueue.push_back(*cores[i].processToRun); //return value rather than the pointer; Idk if this should push_back or front
+                            cores[i].stop(); //stop the core
+                            if(!processQueue.empty()){
+                                Console* processToRun = &processQueue.back(); //get the last console in the queue and store the pointer so we don't have to look for it again (e.x. Console* processToRun);
+                                processQueue.pop_back(); //remove the last console in the queue
+                                cout << "allocating new!!" << endl;
+                                memManager.AllocateProcess(processToRun->process);
+                                runningProcesses.push_back(*processToRun);
+                                cores[i].startProcess(processToRun); // - give it to the core        
+
+                            }
                         }
+                        quantumCounter = 0; //reset the quantum counter
                     }
                     quantumCounter++;
                     std::this_thread::sleep_for(milliseconds(delayPerExec)); 
                 }
-            // while (running) {
-            //     Console current;
-
-            //     {
-            //         std::unique_lock<std::mutex> lock(queueMutex);
-            //         cv.wait(lock, [&] { return !processQueue.empty(); });
-            //         //cout << "Got process" << endl;
-            //         current = processQueue.front();
-            //         processQueue.pop_front();
-            //     }
-            
-            //     // If not allocated memory yet, try allocating
-            //     if (current.process.frames.empty()) {
-            //         //cout << "allocating!!" << endl;
-            //         bool success = memManager.AllocateProcess(current.process);
-            //         if (!success) {
-            //             // Not enough memory; send back to end of queue
-            //             cout << "not success" << endl;
-            //             std::lock_guard<std::mutex> lock(queueMutex);
-            //             processQueue.push_back(current);
-            //             cv.notify_one();
-            //             std::this_thread::sleep_for(milliseconds(1));
-            //             continue;
-            //         }
-            //         //update the memory management
-            //         for (auto& proc : runningProcesses) {
-            //                     if (proc.process.core == current.process.core) {
-            //                         try{
-            //                             proc.process.frames = current.process.frames;
-            //                             proc.process.size = current.process.size;
-            //                             break;
-            //                         }catch(std::exception e){
-            //                             cout << "error with somethign?? " << e.what() << endl;
-            //                         };
-            //                     }
-            //                 }
-            //         cout << "allocated!" << endl;
-            //     }
-                
-            //     // Simulate execution for up to `quantumCycles`
-            //     int execCount = 0;
-            //     while (execCount < quantumCycles && current.process.currLine < current.process.lineCount) {
-            //         std::this_thread::sleep_for(milliseconds(delayPerExec));
-            //         current.process.incrementLine();
-            //         execCount++;
-            //     }
-            //     quantumCounter++;
+        
 
             //     // Take snapshot
             //     //memoryAllocator::writeMemorySnapshot(quantumCounter, memManager.frames, memManager.memoryPerFrame);
-            //     //std::cout << "RAH " << current.process.pid << std::endl;
-            //     // If done, deallocate memory
-            //     if (current.process.currLine >= current.process.lineCount) {
-            //         //std::cout << "maybe. " << current.process.pid << std::endl;
-            //         current.process.end();
-            //         //std::cout << "yes." << std::endl;
-            //         memManager.DeallocateProcess(current.process);
-            //         //std::cout << "no." << std::endl;
-            //     } else {
-            //         //std::cout << "HUH!ASDADWD " << current.process.pid << std::endl;
-            //         std::lock_guard<std::mutex> lock(queueMutex);
-            //         processQueue.push_back(current);
-            //         cv.notify_one();
-            //     }
-            //     //std::cout << "meow " << current.process.pid << std::endl;
 
             //     // Exit condition: nothing in queue and memory is empty
             //     {
@@ -397,6 +352,7 @@ namespace console{
             // }
 
             cv.notify_all();
+            }
         }
                     
     
@@ -465,7 +421,7 @@ namespace console{
         cout << left << "\t" << setw(17) << "Progress" << endl;
 
         if(!list.empty()){
-            for(Console c : list){
+            for(Console& c : list){
                 strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
                 strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
                 strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
@@ -517,7 +473,7 @@ namespace console{
             cout << endl;
 
         if(!list.empty()){
-            for(Console c : list){
+            for(Console& c : list){
                 strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
                 strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
                 strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
@@ -631,7 +587,7 @@ namespace console{
         newLog << left << "\t" << setw(15) << "Total Lines";
         newLog << left << "\t" << setw(17) << "Progress" << "\n";
         if(!processQueue.empty()){
-            for(Console c : processQueue){
+            for(Console& c : processQueue){
                 strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
                 strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
                 strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
@@ -669,7 +625,7 @@ namespace console{
         newLog << left << "\t" << setw(15) << "Total Lines";
         newLog << left << "\t" << setw(17) << "Progress" << "\n";
         if(!runningProcesses.empty()){
-            for(Console c : runningProcesses){
+            for(Console& c : runningProcesses){
                 strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
                 strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
                 strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
@@ -706,7 +662,7 @@ namespace console{
         newLog << left << "\t" << setw(15) << "Total Lines";
         newLog << left << "\t" << setw(17) << "Progress" << "\n";
         if(!finishedProcesses.empty()){
-            for(Console c : finishedProcesses){
+            for(Console& c : finishedProcesses){
                 strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
                 strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
                 strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);

@@ -1,17 +1,16 @@
 #pragma once
 #ifndef cpuCoreH
 #define cpuCoreH
-
+  
 #include "console.h"
 
 using std::thread;
 
-using console::Console;
-
+namespace cpucore {
 class cpuCore {
     public:
     int coreId;
-    Console* processToRun = nullptr; // Pointer to the process currently running on this core
+    console::Console* processToRun = nullptr; // Pointer to the process currently running on this core
     bool running = false; // Flag to control the core's operation
     int delayPerExec = 0; // Delay in milliseconds for each execution step
 
@@ -19,47 +18,42 @@ class cpuCore {
 
     cpuCore(int id, int execDelay) : coreId(id), delayPerExec(execDelay) {}
 
-    void startProcess(Console* console){
+    void startProcess(console::Console* console){
         running = true;
-        processLoop(console); // Start the process loop in a separate thread
-
-        worker = thread(processLoop, ref(console));
-
+        processToRun = console; // Set the process to run on this core
+        worker = thread(&cpuCore::processLoop, this, console);
     }
 
     void stop() {
         running = false;
+        processToRun = nullptr; // Clear the process pointer
         if (worker.joinable()) {
             worker.join();
         }
     }
 
-    void processLoop(Console* console) {
-        processToRun = console; // Set the process to run on this core
-        bool finishedFlag = false;
-        while (running && !finishedFlag) { 
-            if(!console->process.commands.empty()) {
-                try{
-                    console->handleInput(console->process.commands.front());
-                    console->process.commands.pop_front();
-                }catch(std::exception e){
-                    cout << "error with somethign?? " << e.what() << endl;
-                };
+    void processLoop(console::Console* console) {
+        while (running && !console->process.commands.empty()) { 
+            try{
+                console->handleInput(console->process.commands.front());
+                console->process.commands.pop_front();
                 console->process.currLine += 1;
-            }
-            else{
-                console->process.end();
-            }
-
+            }catch(std::exception e){
+                cout << "error with somethign?? " << e.what() << endl;
+            };
+            
             std::this_thread::sleep_for(std::chrono::milliseconds(delayPerExec));
         }
 
-        stop(); //this might resource deadlock lol.
+        console->process.end();
+        running = false;
     }
 
     bool processFinished(){
         return processToRun->process.commands.empty();
     }
 };
+}
+
 
 #endif

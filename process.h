@@ -265,7 +265,7 @@ namespace process{
 
 			void putToBackingStore(){
 				inBackingStore = true;
-				worker = thread(waitingLoop);
+				worker = std::thread(&Process::waitingLoop, this);
 
 			}
 
