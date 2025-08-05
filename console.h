@@ -1,6 +1,6 @@
 #pragma once
-#ifndef CONSOLE_H
-#define CONSOLE_H
+#ifndef consoleH
+#define consoleH
 
 #include <string>
 #include <ctime>
@@ -116,9 +116,9 @@ namespace console{
 
             inline void handleInput(string s);
 
-            Console(){}; //For creating main console
+            Console(): process(){}; //For creating main console
 
-            Console(Process p): process(std::move(p)){} //For consoles for processes       
+            Console(Process p): process(p){} //For consoles for processes       
 
             void clear(){
                 system("cls");
@@ -179,66 +179,13 @@ namespace console{
 
     };
 
-    class cpuCore {
-        public:
-        int coreId;
-        Console* processToRun = nullptr; // Pointer to the process currently running on this core
-        bool running = false; // Flag to control the core's operation
-        int delayPerExec = 0; // Delay in milliseconds for each execution step
-
-        thread worker;
-
-        cpuCore(int id, int execDelay) : coreId(id), delayPerExec(execDelay) {}
-
-        void startProcess(Console* console){
-            running = true;
-            processToRun = console; // Set the process to run on this core
-            worker = thread(&cpuCore::processLoop, this, console);
-        }
-
-        void stop() {
-            running = false;
-            processToRun = nullptr; // Clear the process pointer
-            cout << "process now null" << endl;
-            if (worker.joinable()) {
-                cout << "Joining worker thread for core " << coreId << endl;
-                worker.join();
-                cout << "Worker thread for core " << coreId << " joined." << endl;
-            }
-        }
-
-        void processLoop(Console* console) {
-            while (running && !console->process.commands.empty()) { 
-                try{
-                    console->handleInput(console->process.commands.front());
-                    console->process.commands.pop_front();
-                    console->process.currLine += 1;
-                }catch(std::exception e){
-                    cout << "error with somethign?? " << e.what() << endl;
-                };
-                
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayPerExec));
-            }
-
-            console->process.end();
-            running = false;
-        }
-
-        bool processFinished(){
-            if(processToRun == nullptr) return false;
-            return processToRun->process.commands.empty();
-        }
-    };
-
     class MainConsole : public Console{
         public:
             // Queues and flags
-            list<Console*> processQueue;
-            vector<Console*> runningProcesses;
-            vector<Console*> finishedProcesses;
-            vector<cpuCore> cores;
-
-            list<Console> masterQueue;
+            list<Console> processQueue;
+            vector<Console> runningProcesses;
+            vector<Console> finishedProcesses;
+            vector<thread> cores;
 
             mutex queueMutex;
             mutex processStatusMutex;
@@ -262,13 +209,14 @@ namespace console{
             bool running = true;
             void handleProcessCalls(string s);
             void printProcesses();
-            void _printProcesses(list<Console*> list);
-            void _printProcesses(vector<Console*> list, bool withCore);
+            void _printProcesses(list<Console> list);
+            void _printProcesses(vector<Console> list, bool withCore);
             void printProcessesToFile();
 
             void printProcessSMI();
             
             int consoleMade = 0;
+
 
             std::atomic<bool> generatingProcesses{false};
             std::thread processGeneratorThread;
@@ -296,18 +244,96 @@ namespace console{
                 drawHeader();
                 printProcesses();
             }
-
             MainConsole(int nCpu, string sched, int qc, int bpf, int min, int max, int delay,int maxMem, int memPerFrame, int minmemPerProc, int maxmemPerProc) : numCPU(nCpu), scheduler(sched), quantumCycles(qc), batchProcessFreq(bpf), minIns(min), maxIns(max), delayPerExec(delay), memManager(maxMem, memPerFrame), minMemPerProc(minmemPerProc), maxMemPerProc(maxmemPerProc) {
                 mainConsole = true;
                 // Start CPU cores
-                
                 for (int i = 0; i < numCPU; ++i) {
-                    cores.emplace_back(i, delayPerExec);
-                }            
+                    cores.emplace_back(&MainConsole::cpuWorker, this, i);
+                }              
                 drawHeader();
                 printProcesses();
+                
             }
-            
+
+            // CPU thread function,
+            void cpuWorker(int coreId) {
+                while (running) {
+                    Console console;
+
+                    {   //This block is the source of cpuWorker yoinking processes before scheduler
+                        std::unique_lock<std::mutex> lock(queueMutex);
+                        cv.wait(lock, [this] { return !processQueue.empty() || !running; });
+                        //if (!running && processQueue.empty()) return;
+
+                        // Atomic fetch and pop
+                        console = processQueue.front();
+                        processQueue.pop_front();
+                    }
+
+                    {   //I was also trying to replace this 
+                        std::lock_guard<std::mutex> lock(processStatusMutex);
+                        console.process.start(coreId);
+                        runningProcesses.push_back(console);
+                    }
+
+                    /* I was trying to make this work
+                    {
+                        std::unique_lock<mutex> lock(queueMutex);
+
+                        //maybe we have a cv that waits for the scheduler to say ok before the core takes from the runningqueue (running because scheduler already allocated and let it run)
+                        cv.wait(lock, [this] {return !runningProcesses.empty() || !running;});
+                        console = runningProcesses.front();
+                        //?? idk if we should be popping or not
+                        
+                    }*/
+
+                    for (int i = 0; i < console.process.lineCount; ++i) {
+                        {
+                            std::lock_guard<std::mutex> lock(processStatusMutex);
+
+                            // Update internal `console` state
+                            if(!console.process.commands.empty()) {
+                                try{
+                                    console.handleInput(console.process.commands.front());
+                                    console.process.commands.pop_front();
+                                }catch(std::exception e){
+                                    cout << "error with somethign?? " << e.what() << endl;
+                                };
+                            }
+                            console.process.currLine += 1;
+                            // Also update the copy in runningProcesses
+                            for (auto& proc : runningProcesses) {
+                                if (proc.process.core == console.process.core) {
+                                    try{
+                                        proc.process.currLine = console.process.currLine;
+                                        if(!proc.process.commands.empty()) proc.process.commands.pop_front();
+                                        proc.process.log = console.process.log; // Update log
+                                        break;
+                                    }catch(std::exception e){
+                                        cout << "error with somethign?? " << e.what() << endl;
+                                    };
+                                }
+                            }
+                        }
+
+                        std::this_thread::sleep_for(std::chrono::milliseconds(delayPerExec));
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(processStatusMutex);
+                        runningProcesses.erase(
+                            std::remove_if(runningProcesses.begin(), runningProcesses.end(),
+                                [&](const Console& info) {
+                                    return info.process.core == console.process.core;
+                                }),
+                            runningProcesses.end()
+                        );
+                        
+                        console.process.end();
+                        finishedProcesses.push_back(console);
+                    }
+                }
+            }
 
             // Scheduler that adds n consoles with processes -- THIS DOES NOT SUPPORT HAVING MORE PROCESSES ADDED
             void FCFSscheduler(int numProcess){   
@@ -323,96 +349,89 @@ namespace console{
         
         int quantumCounter = 0; //Counter for quantum cycles
 
-        void rrscheduler(int numProcess) {  
+        void rrscheduler(int numProcess) {
             quantumCounter = 0;
-                while(running){
-                    //cout << "One" << endl;
-                    //check context switch per core
-                    for(int i = 0; i < numCPU; i++){
-                        //cout << "1.5" << endl;
-                        if(!cores[i].running){ //if core is not running, context switch
-                            //cout << "1.6" << endl;
-                            if(cores[i].processFinished()){ //Make a function that raises a flag if the currLine >= instruction count
-                                //cout << "1.7" << endl;
-                                memManager.DeallocateProcess(cores[i].processToRun->process); //deallocate the process memory
-                                finishedProcesses.push_back(cores[i].processToRun); //return value rather than the pointer;
 
-                                for (auto it = runningProcesses.begin(); it != runningProcesses.end(); ) {
-                                    //cout << "1.8" << endl;
-                                    if ((*it)->process.pid == cores[i].processToRun->process.pid) {
-                                        //cout << "1.9" << endl;
-                                        it = runningProcesses.erase(it); // returns the next valid iterator
-                                    } else {
-                                        ++it;
-                                    }
-                                }
-                            } 
-                            
-                        //After updating the queues, get the next console
-                        // - Check processqueue (back) for a new console
-                        // - allocate the memory
-                        if(!processQueue.empty()){
-                            Console* processToRun = processQueue.back(); //get the last console in the queue and store the pointer so we don't have to look for it again (e.x. Console* processToRun);
-                            processQueue.pop_back(); //remove the last console in the queue
-                            cout << "allocating!!" << endl;
-                            cout << "allocating new process with id: "<< processToRun->process.pid << endl;
-                            memManager.AllocateProcess(processToRun->process);
-                            runningProcesses.push_back(processToRun);
-                            cores[i].startProcess(processToRun); // - give it to the core                 
-                        }
-                        
-                    }
-                    //cout << "Two" << endl;
+            while (true) {
+                Console current;
 
-                    //check context switch by quantumSlice
-                    if(quantumCounter >= quantumCycles && !processQueue.empty()){
-                        for(int i = 0; i < numCPU; i++){
-                            std::lock_guard<std::mutex> lock(queueMutex);
-                            
-                            for (auto it = runningProcesses.begin(); it != runningProcesses.end(); ) {
-                                    if ((*it)->process.pid == cores[i].processToRun->process.pid) {
-                                        it = runningProcesses.erase(it); // returns the next valid iterator
-                                    } else {
-                                        ++it;
-                                    }
-                            }
-                            processQueue.push_back(cores[i].processToRun); //return value rather than the pointer; Idk if this should push_back or front
-                            cores[i].stop(); //stop the core
-                            std::this_thread::sleep_for(milliseconds(1)); 
-                            if(!processQueue.empty()){
-                                Console* processToRun = processQueue.back(); //get the last console in the queue and store the pointer so we don't have to look for it again (e.x. Console* processToRun);
-                                processQueue.pop_back(); //remove the last console in the queue
-                                cout << "allocating new process with id: "<< processToRun->process.pid << endl;
-                                memManager.AllocateProcess(processToRun->process);
-                                cout << "Process " << processToRun->process.pname << " allocated to core " << i << endl;
-                                runningProcesses.push_back(processToRun);
-                                cores[i].startProcess(processToRun); // - give it to the core        
-                            }
-                        }
-                        quantumCounter = 0; //reset the quantum counter
-                    }
-                    quantumCounter++;
-                    cout << "Quantum counter: " << quantumCounter << endl;
-                    std::this_thread::sleep_for(milliseconds(delayPerExec)); 
+                {
+                    std::unique_lock<std::mutex> lock(queueMutex);
+                    cv.wait(lock, [&] { return !processQueue.empty(); });
+                    //cout << "Got process" << endl;
+                    current = processQueue.front();
+                    processQueue.pop_front();
                 }
-    
-            //     // Take snapshot
-            //     //memoryAllocator::writeMemorySnapshot(quantumCounter, memManager.frames, memManager.memoryPerFrame);
+            
+                // If not allocated memory yet, try allocating
+                if (current.process.frames.empty()) {
+                    //cout << "allocating!!" << endl;
+                    bool success = memManager.AllocateProcess(current.process);
+                    if (!success) {
+                        // Not enough memory; send back to end of queue
+                        // cout << "not success" << endl;
+                        std::lock_guard<std::mutex> lock(queueMutex);
+                        processQueue.push_back(current);
+                        cv.notify_one();
+                        std::this_thread::sleep_for(milliseconds(1));
+                        continue;
+                    }
+                    //update the memory management
+                    for (auto& proc : runningProcesses) {
+                                if (proc.process.core == current.process.core) {
+                                    try{
+                                        proc.process.frames = current.process.frames;
+                                        proc.process.size = current.process.size;
+                                        break;
+                                    }catch(std::exception e){
+                                        cout << "error with somethign?? " << e.what() << endl;
+                                    };
+                                }
+                            }
+                    cout << "allocated!" << endl;
+                }
+                
+                // Simulate execution for up to `quantumCycles`
+                int execCount = 0;
+                while (execCount < quantumCycles && current.process.currLine < current.process.lineCount) {
+                    std::this_thread::sleep_for(milliseconds(delayPerExec));
+                    current.process.incrementLine();
+                    execCount++;
+                }
+                quantumCounter++;
 
-            //     // Exit condition: nothing in queue and memory is empty
-            //     {
-            //         std::lock_guard<std::mutex> lock(queueMutex);
-            //         bool memoryEmpty = std::all_of(memManager.frames.begin(), memManager.frames.end(), [](const Frame& f) {
-            //             return f.pid.empty();
-            //         });
+                // Take snapshot
+                //memoryAllocator::writeMemorySnapshot(quantumCounter, memManager.frames, memManager.memoryPerFrame);
+                //std::cout << "RAH " << current.process.pid << std::endl;
+                // If done, deallocate memory
+                if (current.process.currLine >= current.process.lineCount) {
+                    //std::cout << "maybe. " << current.process.pid << std::endl;
+                    current.process.end();
+                    //std::cout << "yes." << std::endl;
+                    memManager.DeallocateProcess(current.process);
+                    //std::cout << "no." << std::endl;
+                } else {
+                    //std::cout << "HUH!ASDADWD " << current.process.pid << std::endl;
+                    std::lock_guard<std::mutex> lock(queueMutex);
+                    processQueue.push_back(current);
+                    cv.notify_one();
+                }
+                //std::cout << "meow " << current.process.pid << std::endl;
 
-            //         if (processQueue.empty() && memoryEmpty) break;
-            //     }
+                // Exit condition: nothing in queue and memory is empty
+                {
+                    std::lock_guard<std::mutex> lock(queueMutex);
+                    bool memoryEmpty = std::all_of(memManager.frames.begin(), memManager.frames.end(), [](const Frame& f) {
+                        return f.pid.empty();
+                    });
 
-            //     std::this_thread::sleep_for(milliseconds(1));
-            // }
+                    if (processQueue.empty() && memoryEmpty) break;
+                }
+
+                std::this_thread::sleep_for(milliseconds(1));
             }
-            //cout << "Three" << endl;
+
+            cv.notify_all();
         }
                     
     
@@ -452,21 +471,21 @@ namespace console{
                 */
             }
             Console* searchList(string name){ //used to search through the console list
-                for(Console *c : processQueue){
-                    if(c->process.pname == name) return c; //If it finds a matching process name, return the address of the console
+                for(Console &c : processQueue){
+                    if(c.process.pname == name) return &c; //If it finds a matching process name, return the address of the console
                 }
-                for(Console *c : runningProcesses){
-                    if(c->process.pname == name) return c; //If it finds a matching process name, return the address of the console
+                for(Console &c : runningProcesses){
+                    if(c.process.pname == name) return &c; //If it finds a matching process name, return the address of the console
                 }
-                for(Console *c : finishedProcesses){
-                    if(c->process.pname == name) return c; //If it finds a matching process name, return the address of the console
+                for(Console &c : finishedProcesses){
+                    if(c.process.pname == name) return &c; //If it finds a matching process name, return the address of the console
                 }
                 cout << "[SearchList] could not find process name \"" << name << "\"" << endl;
                 return NULL;
             }
     };
 
-    void MainConsole::_printProcesses(list<Console*> list){ //just a helper function for printing processes
+    void MainConsole::_printProcesses(list<Console> list){ //just a helper function for printing processes
         char time[30];
         char timeS[30];
         char timeF[30];
@@ -481,19 +500,19 @@ namespace console{
         cout << left << "\t" << setw(17) << "Progress" << endl;
 
         if(!list.empty()){
-            for(Console *c : list){
-                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c->process.arrivalTimeStamp);
-                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c->process.timestamp);
-                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c->process.finishTimeStamp);
-                percentage = ((double)c->process.currLine / (double)c->process.lineCount) * 100.00;
+            for(Console c : list){
+                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
+                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
+                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
+                percentage = ((double)c.process.currLine / (double)c.process.lineCount) * 100.00;
 
-                cout << left << setw(4) << c->process.pid;
-                cout << left << "\t" << setw(20) << c->process.pname;
+                cout << left << setw(4) << c.process.pid;
+                cout << left << "\t" << setw(20) << c.process.pname;
                 cout << left << "\t" << setw(30) << time;
                 cout << left << "\t" << setw(30) << timeS;
                 cout << left << "\t" << setw(30) << timeF;
-                cout << left << "\t" << setw(15) << c->process.currLine;
-                cout << left << "\t" << setw(15) << c->process.lineCount;
+                cout << left << "\t" << setw(15) << c.process.currLine;
+                cout << left << "\t" << setw(15) << c.process.lineCount;
                 cout << right << "\t" << setw(3) << percentage;
                 cout << left << "% [";
                 for(int i = 0; i < percentage / 10; i++){
@@ -511,7 +530,7 @@ namespace console{
         cout << endl << endl;
     }
 
-    void MainConsole::_printProcesses(vector<Console*> list, bool withCore = false){
+    void MainConsole::_printProcesses(vector<Console> list, bool withCore = false){
         char time[30];
         char timeS[30];
         char timeF[30];
@@ -533,22 +552,22 @@ namespace console{
             cout << endl;
 
         if(!list.empty()){
-            for(Console *c : list){
-                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c->process.arrivalTimeStamp);
-                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c->process.timestamp);
-                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c->process.finishTimeStamp);
-                percentage = ((double)c->process.currLine / (double)c->process.lineCount) * 100.00;
+            for(Console c : list){
+                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
+                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
+                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
+                percentage = ((double)c.process.currLine / (double)c.process.lineCount) * 100.00;
 
-                cout << left << setw(4) << c->process.pid;
-                cout << left << "\t" << setw(20) << c->process.pname;
+                cout << left << setw(4) << c.process.pid;
+                cout << left << "\t" << setw(20) << c.process.pname;
                 cout << left << "\t" << setw(30) << time;
                 cout << left << "\t" << setw(30) << timeS;
                 if(!withCore)
                     cout << left << "\t" << setw(30) << timeF;
                 else
-                    cout << left << "\t" << setw(8) << c->process.core;
-                cout << left << "\t" << setw(15) << c->process.currLine;
-                cout << left << "\t" << setw(15) << c->process.lineCount;
+                    cout << left << "\t" << setw(8) << c.process.core;
+                cout << left << "\t" << setw(15) << c.process.currLine;
+                cout << left << "\t" << setw(15) << c.process.lineCount;
                 cout << right << "\t" << setw(3) << percentage;
                 cout << left << "% [";
                 for(int i = 0; i < percentage / 10; i++){
@@ -560,7 +579,7 @@ namespace console{
                 cout << "]     ";
 
                 if(withCore)
-                    cout << left << setw(15) << c->process.getMemorySize() * memPerFrame << endl;
+                    cout << left << setw(15) << c.process.getMemorySize() * memPerFrame << endl;
                 else 
                     cout << endl;
             }
@@ -647,18 +666,18 @@ namespace console{
         newLog << left << "\t" << setw(15) << "Total Lines";
         newLog << left << "\t" << setw(17) << "Progress" << "\n";
         if(!processQueue.empty()){
-            for(Console *c : processQueue){
-                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c->process.arrivalTimeStamp);
-                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c->process.timestamp);
-                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c->process.finishTimeStamp);
-                percentage = ((double)c->process.currLine / (double)c->process.lineCount) * 100.00;
-                newLog << left << setw(4) << c->process.pid;
-                newLog << left << "\t" << setw(20) << c->process.pname;
+            for(Console c : processQueue){
+                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
+                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
+                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
+                percentage = ((double)c.process.currLine / (double)c.process.lineCount) * 100.00;
+                newLog << left << setw(4) << c.process.pid;
+                newLog << left << "\t" << setw(20) << c.process.pname;
                 newLog << left << "\t" << setw(30) << time;
                 newLog << left << "\t" << setw(30) << timeS;
                 newLog << left << "\t" << setw(30) << timeF;
-                newLog << left << "\t" << setw(15) << c->process.currLine;
-                newLog << left << "\t" << setw(15) << c->process.lineCount;
+                newLog << left << "\t" << setw(15) << c.process.currLine;
+                newLog << left << "\t" << setw(15) << c.process.lineCount;
                 newLog << right << "\t" << setw(3) << percentage;
                 newLog << left << "% [";
                 for(int i = 0; i < percentage / 10; i++){
@@ -685,18 +704,18 @@ namespace console{
         newLog << left << "\t" << setw(15) << "Total Lines";
         newLog << left << "\t" << setw(17) << "Progress" << "\n";
         if(!runningProcesses.empty()){
-            for(Console *c : runningProcesses){
-                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c->process.arrivalTimeStamp);
-                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c->process.timestamp);
-                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c->process.finishTimeStamp);
-                percentage = ((double)c->process.currLine / (double)c->process.lineCount) * 100.00;
-                newLog << left << setw(4) << c->process.pid;
-                newLog << left << "\t" << setw(20) << c->process.pname;
+            for(Console c : runningProcesses){
+                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
+                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
+                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
+                percentage = ((double)c.process.currLine / (double)c.process.lineCount) * 100.00;
+                newLog << left << setw(4) << c.process.pid;
+                newLog << left << "\t" << setw(20) << c.process.pname;
                 newLog << left << "\t" << setw(30) << time;
                 newLog << left << "\t" << setw(30) << timeS;
-                newLog << left << "\t" << setw(8) << c->process.core;
-                newLog << left << "\t" << setw(15) << c->process.currLine;
-                newLog << left << "\t" << setw(15) << c->process.lineCount;
+                newLog << left << "\t" << setw(8) << c.process.core;
+                newLog << left << "\t" << setw(15) << c.process.currLine;
+                newLog << left << "\t" << setw(15) << c.process.lineCount;
                 newLog << right << "\t" << setw(3) << percentage;
                 newLog << left << "% [";
                 for(int i = 0; i < percentage / 10; i++){
@@ -722,18 +741,18 @@ namespace console{
         newLog << left << "\t" << setw(15) << "Total Lines";
         newLog << left << "\t" << setw(17) << "Progress" << "\n";
         if(!finishedProcesses.empty()){
-            for(Console *c : finishedProcesses){
-                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c->process.arrivalTimeStamp);
-                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c->process.timestamp);
-                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c->process.finishTimeStamp);
-                percentage = ((double)c->process.currLine / (double)c->process.lineCount) * 100.00;
-                newLog << left << setw(4) << c->process.pid;
-                newLog << left << "\t" << setw(20) << c->process.pname;
+            for(Console c : finishedProcesses){
+                strftime(time, sizeof(time), "%m/%d/%Y, %I:%M:%S %p", &c.process.arrivalTimeStamp);
+                strftime(timeS, sizeof(timeS), "%m/%d/%Y, %I:%M:%S %p", &c.process.timestamp);
+                strftime(timeF, sizeof(timeF), "%m/%d/%Y, %I:%M:%S %p", &c.process.finishTimeStamp);
+                percentage = ((double)c.process.currLine / (double)c.process.lineCount) * 100.00;
+                newLog << left << setw(4) << c.process.pid;
+                newLog << left << "\t" << setw(20) << c.process.pname;
                 newLog << left << "\t" << setw(30) << time;
                 newLog << left << "\t" << setw(30) << timeS;
                 newLog << left << "\t" << setw(30) << timeF;
-                newLog << left << "\t" << setw(15) << c->process.currLine;
-                newLog << left << "\t" << setw(15) << c->process.lineCount;
+                newLog << left << "\t" << setw(15) << c.process.currLine;
+                newLog << left << "\t" << setw(15) << c.process.lineCount;
                 newLog << right << "\t" << setw(3) << percentage;
                 newLog << left << "% [";
                 for(int i = 0; i < percentage / 10; i++){
@@ -791,8 +810,8 @@ namespace console{
         // List running processes
         std::cout << "Running processes and memory usage:\n";
         for (auto &procConsole : runningProcesses) {
-            double procMemMiB = (procConsole->process.getMemorySize() * memPerFrame) / 1024.0 / 1024.0;
-            std::cout << procConsole->process.pname << "\t" << procMemMiB << "MiB\n";
+            double procMemMiB = (procConsole.process.getMemorySize() * memPerFrame) / 1024.0 / 1024.0;
+            std::cout << procConsole.process.pname << "\t" << procMemMiB << "MiB\n";
         }
     }
 

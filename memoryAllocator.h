@@ -25,7 +25,7 @@ using std::cout;
 using std::endl;
 using std::string;
 using std::ofstream;
-using process::Process;
+
 
 namespace memoryAllocator {
 
@@ -125,7 +125,6 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
         int numFrames;
         int memoryPerFrame;
         vector<Frame> frames;
-        vector<Process*> allocatedProcesses;
 
         // Constructor with initialization
         MemoryAllocator(int maxOverallMemory, int memPerFrame)
@@ -157,9 +156,7 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
             int startFrameId = -1;
 
             list<int> idList;
-            
-            if(p.inBackingStore) p.reviveFromStore();
-            cout << "revived from store" << endl;
+
             // Search for free frames
             for (size_t i = 0; i < frames.size(); ++i) {
                 if (frames[i].pid.empty()) {
@@ -171,49 +168,17 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
                 }
             }
 
-            cout << "searched for frames" << endl;
-
-            while(frameCounter < numNeededFrames){
-                cout << "looking at processes currently allocated..." << endl;
-                //look at the processes currently allocated (???)
-                Process* leastRecent;
-                for(Process* p : allocatedProcesses){
-                    if(leastRecent != nullptr){
-                        cout << "looking at process " << p->pname << endl;
-                        if(leastRecent->waitingCounter < p->waitingCounter)
-                            leastRecent = p;
-                    }
-                    else{
-                        leastRecent = p;
-                    }
-                }
-                cout << "done looking" << endl;
-                //look for the one that ran the least recently used
-
-                //put that process to backing store and store the freed ids
-                list<int> freedIds = PutToBackingStore(*leastRecent);
-                cout << "putting least recent in backing store" << endl;
-                for(int id : freedIds){
-                    idList.push_back(id);
-                    frameCounter++;
-
-                    if(frameCounter >= numNeededFrames) break;
-                }
-
-
-            } 
             if (frameCounter == numNeededFrames) {
-                cout << "found enough frames" << endl;
                 for (int i : idList) {
                     frames[i].pid = p.pname;
                     p.frames.push_back(frames[i]);
                 }
+                /* For debugging.
                 cout << "Allocated to " << p.pname << " are:" << endl;
                 for(int j : idList){
                     cout << j << endl;
                 }
-                cout << "-----" << endl;
-                allocatedProcesses.push_back(&p);
+                cout << "-----" << endl;*/
                 return true;
             } else {
                 return false;
@@ -248,21 +213,6 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
             } else {
                 return false;
             }
-        }
-
-        list<int> PutToBackingStore(process::Process& p){
-            p.putToBackingStore();
-            list<int> ids;
-
-            for (Frame f : p.frames) {
-                if (f.id >= 0 && f.id < frames.size()) {
-                    frames[f.id].pid.clear();
-                    ids.push_back(f.id);
-                }
-            }
-            p.frames.clear();
-            
-            return ids;
         }
 
         void DeallocateProcess(process::Process& p) {
