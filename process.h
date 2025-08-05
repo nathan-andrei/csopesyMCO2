@@ -58,6 +58,11 @@ namespace process{
 			list<Frame> frames;			//List of frames that the process uses.
 			int size;
 
+			int waitingCounter = 0;
+			bool inBackingStore = false;
+
+			std::thread worker;
+
 			void incrementLine(){ //Function for incrementing current line and the instruction pointer.
 				currLine++; 	//Increment the integer counter for line
 				instructions++; //Go the next instruction in the memory.
@@ -256,6 +261,29 @@ namespace process{
 
 			int getMemorySize(){
 				return frames.size();
+			}
+
+			void putToBackingStore(){
+				inBackingStore = true;
+				worker = thread(waitingLoop);
+
+			}
+
+			void reviveFromStore() {
+				inBackingStore = false;
+				if (worker.joinable()) {
+					worker.join();
+				}
+				waitingCounter = 0;
+			}
+
+			void waitingLoop(int delayPerExec) {
+				while(inBackingStore){
+
+					waitingCounter++;
+
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
 			}
 
 			
