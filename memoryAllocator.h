@@ -159,7 +159,7 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
             list<int> idList;
             
             if(p.inBackingStore) p.reviveFromStore();
-
+            cout << "revived from store" << endl;
             // Search for free frames
             for (size_t i = 0; i < frames.size(); ++i) {
                 if (frames[i].pid.empty()) {
@@ -171,11 +171,15 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
                 }
             }
 
+            cout << "searched for frames" << endl;
+
             while(frameCounter < numNeededFrames){
+                cout << "looking at processes currently allocated..." << endl;
                 //look at the processes currently allocated (???)
                 Process* leastRecent;
                 for(Process* p : allocatedProcesses){
-                    if(leastRecent != NULL){
+                    if(leastRecent != nullptr){
+                        cout << "looking at process " << p->pname << endl;
                         if(leastRecent->waitingCounter < p->waitingCounter)
                             leastRecent = p;
                     }
@@ -183,12 +187,12 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
                         leastRecent = p;
                     }
                 }
-
+                cout << "done looking" << endl;
                 //look for the one that ran the least recently used
 
                 //put that process to backing store and store the freed ids
                 list<int> freedIds = PutToBackingStore(*leastRecent);
-
+                cout << "putting least recent in backing store" << endl;
                 for(int id : freedIds){
                     idList.push_back(id);
                     frameCounter++;
@@ -196,19 +200,19 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
                     if(frameCounter >= numNeededFrames) break;
                 }
 
-            }
 
+            } 
             if (frameCounter == numNeededFrames) {
+                cout << "found enough frames" << endl;
                 for (int i : idList) {
                     frames[i].pid = p.pname;
                     p.frames.push_back(frames[i]);
                 }
-                /* For debugging.
                 cout << "Allocated to " << p.pname << " are:" << endl;
                 for(int j : idList){
                     cout << j << endl;
                 }
-                cout << "-----" << endl;*/
+                cout << "-----" << endl;
                 allocatedProcesses.push_back(&p);
                 return true;
             } else {

@@ -1,0 +1,7 @@
+{
+    "name": "Launch",
+    "type": "lldb",
+    "request": "launch",
+    "program": "$csopesyMCO2/main",
+    "args": ["-arg1", "-arg2"],
+}

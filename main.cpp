@@ -169,6 +169,7 @@ int main(){
 
 	// Detach the threads so we don't wait on them because they have while(true) loops
 	sched.detach();
+    cout << "Exiting program..." << endl;
     //for (auto& t : mainConsole.cores) t.detach();
 
     return 0;
@@ -208,7 +209,8 @@ void MainConsole::processGeneratorLoop(int i, string s, int mem) {
             console.process = Process("process_" + std::to_string(consoleMade), consoleMade, minIns, maxIns, minMemPerProc, maxMemPerProc);
         {
             std::lock_guard<std::mutex> lock(queueMutex);
-            processQueue.push_back(console);
+            masterQueue.push_back(std::move(console));
+            processQueue.push_back(&masterQueue.back());
             //if(i != 0) this->handoff = &processQueue.back();
         }
         cv.notify_one();

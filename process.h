@@ -277,7 +277,7 @@ namespace process{
 				waitingCounter = 0;
 			}
 
-			void waitingLoop(int delayPerExec) {
+			void waitingLoop() {
 				while(inBackingStore){
 
 					waitingCounter++;
