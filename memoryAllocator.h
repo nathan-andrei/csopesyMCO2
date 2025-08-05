@@ -125,6 +125,7 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
         int numFrames;
         int memoryPerFrame;
         vector<Frame> frames;
+        vector<Process*> allocatedProcesses;
 
         // Constructor with initialization
         MemoryAllocator(int maxOverallMemory, int memPerFrame)
@@ -156,6 +157,8 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
             int startFrameId = -1;
 
             list<int> idList;
+            
+            if(p.inBackingStore) p.reviveFromStore();
 
             // Search for free frames
             for (size_t i = 0; i < frames.size(); ++i) {
@@ -166,6 +169,33 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
                 if (frameCounter == numNeededFrames) {
                     break;
                 }
+            }
+
+            while(frameCounter < numNeededFrames){
+                //look at the processes currently allocated (???)
+                Process* leastRecent;
+                for(Process* p : allocatedProcesses){
+                    if(leastRecent != NULL){
+                        if(leastRecent->waitingCounter < p->waitingCounter)
+                            leastRecent = p;
+                    }
+                    else{
+                        leastRecent = p;
+                    }
+                }
+
+                //look for the one that ran the least recently used
+
+                //put that process to backing store and store the freed ids
+                list<int> freedIds = PutToBackingStore(*leastRecent);
+
+                for(int id : freedIds){
+                    idList.push_back(id);
+                    frameCounter++;
+
+                    if(frameCounter >= numNeededFrames) break;
+                }
+
             }
 
             if (frameCounter == numNeededFrames) {
@@ -179,6 +209,7 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
                     cout << j << endl;
                 }
                 cout << "-----" << endl;*/
+                allocatedProcesses.push_back(&p);
                 return true;
             } else {
                 return false;
@@ -213,6 +244,19 @@ void writeMemorySnapshot(int quantumCycle, const vector<Frame>& frames, int memP
             } else {
                 return false;
             }
+        }
+
+        list<int> PutToBackingStore(process::Process& p){
+            p.putToBackingStore();
+            list<int> ids;
+
+            for (Frame f : p.frames) {
+                if (f.id >= 0 && f.id < frames.size()) {
+                    frames[f.id].pid.clear();
+                    ids.push_back(f.id);
+                }
+            }
+            p.frames.clear();
         }
 
         void DeallocateProcess(process::Process& p) {
