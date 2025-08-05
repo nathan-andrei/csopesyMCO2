@@ -169,7 +169,7 @@ int main(){
 
 	// Detach the threads so we don't wait on them because they have while(true) loops
 	sched.detach();
-    for (auto& t : mainConsole.cores) t.detach();
+    //for (auto& t : mainConsole.cores) t.detach();
 
     return 0;
 }
