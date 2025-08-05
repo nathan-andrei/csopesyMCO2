@@ -18,6 +18,7 @@
 #include "process.h" //This is for the process class
 #include "memoryAllocator.h" //This is for the memory allocator class
 #include "frame.h"
+#include "stats.h"
 #include "cpuCore.h" //This is for the cpuCore class
 
 using std::left;
@@ -38,6 +39,36 @@ using std::regex;
 using std::regex_replace;
 using std::atomic;
 
+
+inline void printVMStat(memoryAllocator::MemoryAllocator &allocator) {
+    VMStat stats{};
+    stats.totalMemory = allocator.maxMemory;
+
+    // Count used frames
+    uint64_t usedFrames = 0;
+    for (auto &f : allocator.frames) {
+        if (!f.pid.empty()) usedFrames++;
+    }
+    stats.usedMemory = usedFrames * allocator.memoryPerFrame;
+    stats.freeMemory = stats.totalMemory - stats.usedMemory;
+
+    // Placeholders
+    stats.idleCpuTicks = 0;
+    stats.activeCpuTicks = 0;
+    stats.totalCpuTicks = 0;
+    stats.pagedIn = 0;
+    stats.pagedOut = 0;
+
+    // Print like vmstat -s
+    std::cout << stats.totalMemory / 1024 << " K total memory\n";
+    std::cout << stats.usedMemory / 1024  << " K used memory\n";
+    std::cout << stats.freeMemory / 1024  << " K free memory\n";
+    std::cout << stats.idleCpuTicks       << " idle cpu ticks\n";
+    std::cout << stats.activeCpuTicks     << " active cpu ticks\n";
+    std::cout << stats.totalCpuTicks      << " total cpu ticks\n";
+    std::cout << stats.pagedIn            << " pages paged in\n";
+    std::cout << stats.pagedOut           << " pages paged out\n";
+}
 
 namespace console{
     class Console{
@@ -182,6 +213,9 @@ namespace console{
             void _printProcesses(list<Console> list);
             void _printProcesses(vector<Console> list, bool withCore);
             void printProcessesToFile();
+
+            void printProcessSMI();
+            
             int consoleMade = 0;
 
             std::atomic<bool> generatingProcesses{false};
@@ -706,6 +740,46 @@ namespace console{
 
     }
 
+    void MainConsole::printProcessSMI() {
+        // Clear screen
+        system("cls");
+
+        // Print CSOPESY header
+        drawHeader();
+
+        // CPU Utilization
+        int numCores = cores.size();
+        int usedCores = runningProcesses.size();
+        double cpuUtil = (numCores > 0) ? ((double)usedCores / numCores) * 100.0 : 0;
+
+        // Memory stats
+        uint64_t totalMemBytes = memManager.maxMemory;
+        uint64_t usedFrames = 0;
+        for (auto &f : memManager.frames) {
+            if (!f.pid.empty()) usedFrames++;
+        }
+        uint64_t usedMemBytes = usedFrames * memManager.memoryPerFrame;
+        double memUtilPercent = (totalMemBytes > 0) ? ((double)usedMemBytes / totalMemBytes) * 100.0 : 0;
+
+        // Convert to MiB
+        double usedMiB = usedMemBytes / 1024.0 / 1024.0;
+        double totalMiB = totalMemBytes / 1024.0 / 1024.0;
+
+        // Print overview
+        std::cout << "| PROCESS-SMI V01.00 Driver Version: 01.00 |\n";
+        std::cout << "-------------------------------------------\n";
+        std::cout << "CPU-Util: " << cpuUtil << "%\n";
+        std::cout << "Memory Usage: " << usedMiB << "MiB / " << totalMiB << "MiB\n";
+        std::cout << "Memory Util: " << memUtilPercent << "%\n\n";
+
+        // List running processes
+        std::cout << "Running processes and memory usage:\n";
+        for (auto &procConsole : runningProcesses) {
+            double procMemMiB = (procConsole.process.getMemorySize() * memPerFrame) / 1024.0 / 1024.0;
+            std::cout << procConsole.process.pname << "\t" << procMemMiB << "MiB\n";
+        }
+    }
+
     void Console::handleInput(string s){
         //handle system calls first, then hand over the string to processcalls
         std::ostringstream output;
@@ -899,6 +973,13 @@ namespace console{
             }
             else if(tokens.front() == "report-util"){
                 printProcessesToFile();
+            }
+
+            else if(tokens.front() == "vmstat") {
+                printVMStat(memManager);
+            }
+            else if(tokens.front() == "process-smi"){ 
+                printProcessSMI();
             }
             else{
                 cout << "\"" << tokens.front() << invalid << endl;
