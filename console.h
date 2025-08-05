@@ -18,6 +18,7 @@
 #include "process.h" //This is for the process class
 #include "memoryAllocator.h" //This is for the memory allocator class
 #include "frame.h"
+#include "cpuCore.h" //This is for the cpuCore class
 
 using std::left;
 using std::right;
@@ -154,7 +155,7 @@ namespace console{
             list<Console> processQueue;
             vector<Console> runningProcesses;
             vector<Console> finishedProcesses;
-            vector<thread> cores;
+            vector<cpuCore> cores;
 
             mutex queueMutex;
             mutex processStatusMutex;
@@ -183,14 +184,13 @@ namespace console{
             void printProcessesToFile();
             int consoleMade = 0;
 
-
             std::atomic<bool> generatingProcesses{false};
             std::thread processGeneratorThread;
             void startProcessGenerator(int i = 0, string s = "", int mem = 16);
             void stopProcessGenerator();
             void processGeneratorLoop(int i = 0, string s = "", int mem = 16);
 
-             memoryAllocator::MemoryAllocator memManager;
+            memoryAllocator::MemoryAllocator memManager;
             void drawHeader(){
                 cout << "      ______   ______   ______   ______   ______   ______   ______" << endl;
                 cout << "---|______|-|______|-|______|-|______|-|______|-|______|-|______|---" << endl;
@@ -210,96 +210,18 @@ namespace console{
                 drawHeader();
                 printProcesses();
             }
+
             MainConsole(int nCpu, string sched, int qc, int bpf, int min, int max, int delay,int maxMem, int memPerFrame, int minmemPerProc, int maxmemPerProc) : numCPU(nCpu), scheduler(sched), quantumCycles(qc), batchProcessFreq(bpf), minIns(min), maxIns(max), delayPerExec(delay), memManager(maxMem, memPerFrame), minMemPerProc(minmemPerProc), maxMemPerProc(maxmemPerProc) {
                 mainConsole = true;
                 // Start CPU cores
+                
                 for (int i = 0; i < numCPU; ++i) {
-                    cores.emplace_back(&MainConsole::cpuWorker, this, i);
-                }              
+                    cores.emplace_back(i, delayPerExec);
+                }            
                 drawHeader();
                 printProcesses();
-                
             }
-
-            // CPU thread function,
-            void cpuWorker(int coreId) {
-                while (running) {
-                    Console console;
-
-                    {   //This block is the source of cpuWorker yoinking processes before scheduler
-                        std::unique_lock<std::mutex> lock(queueMutex);
-                        cv.wait(lock, [this] { return !processQueue.empty() || !running; });
-                        //if (!running && processQueue.empty()) return;
-
-                        // Atomic fetch and pop
-                        console = processQueue.front();
-                        processQueue.pop_front();
-                    }
-
-                    {   //I was also trying to replace this 
-                        std::lock_guard<std::mutex> lock(processStatusMutex);
-                        console.process.start(coreId);
-                        runningProcesses.push_back(console);
-                    }
-
-                    /* I was trying to make this work
-                    {
-                        std::unique_lock<mutex> lock(queueMutex);
-
-                        //maybe we have a cv that waits for the scheduler to say ok before the core takes from the runningqueue (running because scheduler already allocated and let it run)
-                        cv.wait(lock, [this] {return !runningProcesses.empty() || !running;});
-                        console = runningProcesses.front();
-                        //?? idk if we should be popping or not
-                        
-                    }*/
-
-                    for (int i = 0; i < console.process.lineCount; ++i) {
-                        {
-                            std::lock_guard<std::mutex> lock(processStatusMutex);
-
-                            // Update internal `console` state
-                            if(!console.process.commands.empty()) {
-                                try{
-                                    console.handleInput(console.process.commands.front());
-                                    console.process.commands.pop_front();
-                                }catch(std::exception e){
-                                    cout << "error with somethign?? " << e.what() << endl;
-                                };
-                            }
-                            console.process.currLine += 1;
-                            // Also update the copy in runningProcesses
-                            for (auto& proc : runningProcesses) {
-                                if (proc.process.core == console.process.core) {
-                                    try{
-                                        proc.process.currLine = console.process.currLine;
-                                        if(!proc.process.commands.empty()) proc.process.commands.pop_front();
-                                        proc.process.log = console.process.log; // Update log
-                                        break;
-                                    }catch(std::exception e){
-                                        cout << "error with somethign?? " << e.what() << endl;
-                                    };
-                                }
-                            }
-                        }
-
-                        std::this_thread::sleep_for(std::chrono::milliseconds(delayPerExec));
-                    }
-
-                    {
-                        std::lock_guard<std::mutex> lock(processStatusMutex);
-                        runningProcesses.erase(
-                            std::remove_if(runningProcesses.begin(), runningProcesses.end(),
-                                [&](const Console& info) {
-                                    return info.process.core == console.process.core;
-                                }),
-                            runningProcesses.end()
-                        );
-                        
-                        console.process.end();
-                        finishedProcesses.push_back(console);
-                    }
-                }
-            }
+            
 
             // Scheduler that adds n consoles with processes -- THIS DOES NOT SUPPORT HAVING MORE PROCESSES ADDED
             void FCFSscheduler(int numProcess){   
@@ -315,87 +237,130 @@ namespace console{
         
         int quantumCounter = 0; //Counter for quantum cycles
 
-        void rrscheduler(int numProcess) {
+        void rrscheduler(int numProcess) {  
             quantumCounter = 0;
+                while(running){
+                    //check context switch per core
+                    for(int i = 0; i < numCPU; i++){
+                        if(!cores[i].running){ //if core is not running, context switch
+                            if(cores[i].processFinished()){ //Make a function that raises a flag if the currLine >= instruction count     
+                                finishedProcesses.push_back(*cores[i].processToRun); //return value rather than the pointer;
 
-            while (true) {
-                Console current;
-
-                {
-                    std::unique_lock<std::mutex> lock(queueMutex);
-                    cv.wait(lock, [&] { return !processQueue.empty(); });
-                    //cout << "Got process" << endl;
-                    current = processQueue.front();
-                    processQueue.pop_front();
-                }
-            
-                // If not allocated memory yet, try allocating
-                if (current.process.frames.empty()) {
-                    //cout << "allocating!!" << endl;
-                    bool success = memManager.AllocateProcess(current.process);
-                    if (!success) {
-                        // Not enough memory; send back to end of queue
-                        cout << "not success" << endl;
-                        std::lock_guard<std::mutex> lock(queueMutex);
-                        processQueue.push_back(current);
-                        cv.notify_one();
-                        std::this_thread::sleep_for(milliseconds(1));
-                        continue;
-                    }
-                    //update the memory management
-                    for (auto& proc : runningProcesses) {
-                                if (proc.process.core == current.process.core) {
-                                    try{
-                                        proc.process.frames = current.process.frames;
-                                        proc.process.size = current.process.size;
-                                        break;
-                                    }catch(std::exception e){
-                                        cout << "error with somethign?? " << e.what() << endl;
-                                    };
+                                for(Console c : runningProcesses){ //iterate throught the running proccessess to look for the running process
+                                    if(&c == cores[i].processToRun){
+                                        //remove the console from runningProcess
+                                    }
                                 }
                             }
-                    cout << "allocated!" << endl;
+                            else{ //if the core is not yet finished
+                                processQueue.push_front(*cores[i].processToRun); //return value rather than the pointer; Idk if this should push_back or front
+
+                                for(Console c : runningProcesses){ //iterate throught the running proccessess to look for the running process
+                                    if(&c == cores[i].processToRun){
+                                        //remove the console from runningProcess
+                                    }
+                                }
+                            }     
+                            cores[i].stop(); //turn off running and clear the internal pointer
+                            
+                            //After updating the queues, get the next console
+                            // - Check processqueue (back) for a new console
+                            // - allocate the memory
+                            // - store the pointer so we don't have to look for it again (e.x. Console* processToRun);
+                            // - pop it into running queue
+                            // - give it to the core
+                            cores[i].startProcess(processToRun);                 
+                        }
+                        
+                    }
+
+                    //check context switch by quantumSlice
+                    if(quantumCounter >= quantumCycles){
+                        for(int i = 0; i < numCPU; i++){
+                            //do the same thing you do, but don't check for cores[i].running because we don't care if they are, we'll context switch no matter what
+                        }
+                    }
+                    quantumCounter++;
+                    std::this_thread::sleep_for(milliseconds(delayPerExec)); 
                 }
+            // while (running) {
+            //     Console current;
+
+            //     {
+            //         std::unique_lock<std::mutex> lock(queueMutex);
+            //         cv.wait(lock, [&] { return !processQueue.empty(); });
+            //         //cout << "Got process" << endl;
+            //         current = processQueue.front();
+            //         processQueue.pop_front();
+            //     }
+            
+            //     // If not allocated memory yet, try allocating
+            //     if (current.process.frames.empty()) {
+            //         //cout << "allocating!!" << endl;
+            //         bool success = memManager.AllocateProcess(current.process);
+            //         if (!success) {
+            //             // Not enough memory; send back to end of queue
+            //             cout << "not success" << endl;
+            //             std::lock_guard<std::mutex> lock(queueMutex);
+            //             processQueue.push_back(current);
+            //             cv.notify_one();
+            //             std::this_thread::sleep_for(milliseconds(1));
+            //             continue;
+            //         }
+            //         //update the memory management
+            //         for (auto& proc : runningProcesses) {
+            //                     if (proc.process.core == current.process.core) {
+            //                         try{
+            //                             proc.process.frames = current.process.frames;
+            //                             proc.process.size = current.process.size;
+            //                             break;
+            //                         }catch(std::exception e){
+            //                             cout << "error with somethign?? " << e.what() << endl;
+            //                         };
+            //                     }
+            //                 }
+            //         cout << "allocated!" << endl;
+            //     }
                 
-                // Simulate execution for up to `quantumCycles`
-                int execCount = 0;
-                while (execCount < quantumCycles && current.process.currLine < current.process.lineCount) {
-                    std::this_thread::sleep_for(milliseconds(delayPerExec));
-                    current.process.incrementLine();
-                    execCount++;
-                }
-                quantumCounter++;
+            //     // Simulate execution for up to `quantumCycles`
+            //     int execCount = 0;
+            //     while (execCount < quantumCycles && current.process.currLine < current.process.lineCount) {
+            //         std::this_thread::sleep_for(milliseconds(delayPerExec));
+            //         current.process.incrementLine();
+            //         execCount++;
+            //     }
+            //     quantumCounter++;
 
-                // Take snapshot
-                //memoryAllocator::writeMemorySnapshot(quantumCounter, memManager.frames, memManager.memoryPerFrame);
-                //std::cout << "RAH " << current.process.pid << std::endl;
-                // If done, deallocate memory
-                if (current.process.currLine >= current.process.lineCount) {
-                    //std::cout << "maybe. " << current.process.pid << std::endl;
-                    current.process.end();
-                    //std::cout << "yes." << std::endl;
-                    memManager.DeallocateProcess(current.process);
-                    //std::cout << "no." << std::endl;
-                } else {
-                    //std::cout << "HUH!ASDADWD " << current.process.pid << std::endl;
-                    std::lock_guard<std::mutex> lock(queueMutex);
-                    processQueue.push_back(current);
-                    cv.notify_one();
-                }
-                //std::cout << "meow " << current.process.pid << std::endl;
+            //     // Take snapshot
+            //     //memoryAllocator::writeMemorySnapshot(quantumCounter, memManager.frames, memManager.memoryPerFrame);
+            //     //std::cout << "RAH " << current.process.pid << std::endl;
+            //     // If done, deallocate memory
+            //     if (current.process.currLine >= current.process.lineCount) {
+            //         //std::cout << "maybe. " << current.process.pid << std::endl;
+            //         current.process.end();
+            //         //std::cout << "yes." << std::endl;
+            //         memManager.DeallocateProcess(current.process);
+            //         //std::cout << "no." << std::endl;
+            //     } else {
+            //         //std::cout << "HUH!ASDADWD " << current.process.pid << std::endl;
+            //         std::lock_guard<std::mutex> lock(queueMutex);
+            //         processQueue.push_back(current);
+            //         cv.notify_one();
+            //     }
+            //     //std::cout << "meow " << current.process.pid << std::endl;
 
-                // Exit condition: nothing in queue and memory is empty
-                {
-                    std::lock_guard<std::mutex> lock(queueMutex);
-                    bool memoryEmpty = std::all_of(memManager.frames.begin(), memManager.frames.end(), [](const Frame& f) {
-                        return f.pid.empty();
-                    });
+            //     // Exit condition: nothing in queue and memory is empty
+            //     {
+            //         std::lock_guard<std::mutex> lock(queueMutex);
+            //         bool memoryEmpty = std::all_of(memManager.frames.begin(), memManager.frames.end(), [](const Frame& f) {
+            //             return f.pid.empty();
+            //         });
 
-                    if (processQueue.empty() && memoryEmpty) break;
-                }
+            //         if (processQueue.empty() && memoryEmpty) break;
+            //     }
 
-                std::this_thread::sleep_for(milliseconds(1));
-            }
+            //     std::this_thread::sleep_for(milliseconds(1));
+            // }
 
             cv.notify_all();
         }
